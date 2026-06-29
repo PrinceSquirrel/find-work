@@ -70,7 +70,7 @@ Updated: 2026-06-30 Asia/Shanghai
 - BOSS/实习僧页面 DOM 和文案随时可能变化，当前同步服务只能提高可诊断性，不能保证长期稳定。
 - 用户如果未登录、页面停在验证码/风控页、结果为空页，系统只能返回诊断，不能绕过平台限制。
 - LLM 输出仍需要 `ReviewAgent` 审核，模型可能返回不合规 JSON 或尝试虚构经历，因此保留本地回退。
-- 当前 Git 已初始化，但还没有配置远程仓库；没有 remote 时无法 push。
+- Git 远程仓库已配置为 `https://github.com/PrinceSquirrel/find-work.git`，`main` 已成功推送并跟踪 `origin/main`；后续 push 仍依赖本机 GitHub 凭据可用。
 - 文档和代码中不得写入真实 API Key、Cookie、密码或平台隐私数据。
 
 ## 下一步任务
@@ -100,3 +100,4 @@ Updated: 2026-06-30 Asia/Shanghai
 ## 最近验证
 
 - `python -m pytest -q`：通过，27 个测试。
+- `git push -u origin main`：通过，`main` 已推送到 `PrinceSquirrel/find-work`。
