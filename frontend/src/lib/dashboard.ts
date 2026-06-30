@@ -39,6 +39,26 @@ export interface AgentStatusRow {
   tokens: number;
 }
 
+export interface BackendAgentEvent {
+  id: number;
+  agent_name: string;
+  status: string;
+  step: string;
+  input_summary: string;
+  output_summary: string;
+  error: string;
+  total_tokens: number;
+  cost_usd: number;
+  created_at: string | null;
+}
+
+export interface BackendAgentEventsSnapshot {
+  current_running_agent: string | null;
+  total_cost_usd: number;
+  agents: BackendAgentEvent[];
+  events: BackendAgentEvent[];
+}
+
 const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
   discovered: [],
   matched: [],
@@ -150,6 +170,41 @@ export function buildAgentStatusRows(snapshot: AgentRuntimeSnapshot): AgentStatu
       tokens: snapshot.usageByAgent[agentName]?.total_tokens ?? 0
     };
   });
+}
+
+export function buildAgentStatusRowsFromEvents(snapshot: BackendAgentEventsSnapshot | null): AgentStatusRow[] {
+  const latestByAgent = new Map((snapshot?.agents ?? []).map((event) => [event.agent_name, event]));
+  return AGENT_ORDER.map((agentName) => {
+    const event = latestByAgent.get(agentName);
+    const status = event ? normalizeAgentStatus(event.status) : "pending";
+    const effectiveStatus = snapshot?.current_running_agent === agentName && status !== "failed" ? "running" : status;
+    return {
+      agentName,
+      status: effectiveStatus,
+      currentStep: event?.step || getCurrentStep(agentName, effectiveStatus),
+      inputSummary: event?.input_summary || "",
+      outputSummary: event?.output_summary || "",
+      errorMessage: event ? getEventErrorMessage(event, effectiveStatus) : "",
+      tokens: event?.total_tokens ?? 0
+    };
+  });
+}
+
+function normalizeAgentStatus(status: string): AgentRuntimeStatus {
+  if (status === "running" || status === "success" || status === "failed") {
+    return status;
+  }
+  return "pending";
+}
+
+function getEventErrorMessage(event: BackendAgentEvent, status: AgentRuntimeStatus): string {
+  if (event.error) {
+    return event.error;
+  }
+  if (status === "failed") {
+    return event.output_summary || event.step || "Agent failed";
+  }
+  return "";
 }
 
 function getRuntimeStatus(agentName: RuntimeAgentName, snapshot: AgentRuntimeSnapshot): AgentRuntimeStatus {

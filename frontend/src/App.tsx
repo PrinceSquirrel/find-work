@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "./lib/api";
 import {
   buildAgentStatusRows,
+  buildAgentStatusRowsFromEvents,
   clampPercent,
   formatDateTime,
   getAllowedNextStatuses,
@@ -97,6 +98,7 @@ function App() {
   const [applications, setApplications] = useState<ApplicationRecord[]>([]);
   const [analytics, setAnalytics] = useState<ApplicationAnalytics | null>(null);
   const [usage, setUsage] = useState<LLMUsageSummary | null>(null);
+  const [agentEvents, setAgentEvents] = useState<Awaited<ReturnType<typeof api.getAgentEvents>> | null>(null);
   const [tailorBundles, setTailorBundles] = useState<Record<number, TailorBundle>>({});
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [lastRun, setLastRun] = useState<SearchRun | null>(null);
@@ -128,6 +130,10 @@ function App() {
 
   useEffect(() => {
     void refreshWorkspace();
+    const timerId = window.setInterval(() => {
+      void refreshAgentEvents();
+    }, 5000);
+    return () => window.clearInterval(timerId);
   }, []);
 
   const rankedJobs = useMemo(() => rankJobs(jobs, filters), [filters, jobs]);
@@ -141,45 +147,51 @@ function App() {
   }, [applications]);
   const usageCards = useMemo(() => summarizeUsage(usage), [usage]);
   const totalApplications = analytics?.totals.applications ?? applications.length;
-  const runningAgent = useMemo(() => {
+  const localRunningAgent = useMemo(() => {
     if (busy.upload) return "ResumeParserAgent";
     if (busy.search) return "JobSearchAgent";
     if (busy.tailorJobId !== null) return "ApplicationWriterAgent";
     return null;
   }, [busy.upload, busy.search, busy.tailorJobId]);
+  const runningAgent = agentEvents?.current_running_agent ?? localRunningAgent;
   const agentRows = useMemo(
     () =>
-      buildAgentStatusRows({
-        runningAgent,
-        failedAgent,
-        errorMessage: error,
-        resumeName: resume?.filename ?? null,
-        searchSummary: `${searchCity || "未选城市"} / ${searchKeywords || "未填关键词"}`,
-        selectedJobTitle: selectedJob?.title ?? null,
-        jobCount: jobs.length,
-        tailoredCount: Object.keys(tailorBundles).length,
-        usageByAgent: usage?.by_agent ?? {}
-      }),
-    [error, failedAgent, jobs.length, resume?.filename, runningAgent, searchCity, searchKeywords, selectedJob?.title, tailorBundles, usage]
+      agentEvents
+        ? buildAgentStatusRowsFromEvents(agentEvents)
+        : buildAgentStatusRows({
+            runningAgent: localRunningAgent,
+            failedAgent,
+            errorMessage: error,
+            resumeName: resume?.filename ?? null,
+            searchSummary: `${searchCity || "未选城市"} / ${searchKeywords || "未填关键词"}`,
+            selectedJobTitle: selectedJob?.title ?? null,
+            jobCount: jobs.length,
+            tailoredCount: Object.keys(tailorBundles).length,
+            usageByAgent: usage?.by_agent ?? {}
+          }),
+    [agentEvents, error, failedAgent, jobs.length, localRunningAgent, resume?.filename, searchCity, searchKeywords, selectedJob?.title, tailorBundles, usage]
   );
+  const agentCost = agentEvents ? `$${agentEvents.total_cost_usd.toFixed(4)}` : usageCards.totalCost;
 
   async function refreshWorkspace() {
     setBusy((current) => ({ ...current, boot: true }));
     setError(null);
     setFailedAgent(null);
     try {
-      const [nextJobs, nextApplications, nextAnalytics, nextUsage, nextSessions] = await Promise.all([
+      const [nextJobs, nextApplications, nextAnalytics, nextUsage, nextSessions, nextAgentEvents] = await Promise.all([
         api.listJobs(),
         api.listApplications(),
         api.getApplicationAnalytics(),
         api.getLlmUsage(),
-        api.getPlatformSessions()
+        api.getPlatformSessions(),
+        api.getAgentEvents()
       ]);
       setJobs(nextJobs);
       setApplications(nextApplications);
       setAnalytics(nextAnalytics);
       setUsage(nextUsage);
       setPlatformSessions(nextSessions.sessions);
+      setAgentEvents(nextAgentEvents);
     } catch (nextError) {
       setFailedAgent("ResumeParserAgent");
       setError(toErrorMessage(nextError));
@@ -189,14 +201,25 @@ function App() {
   }
 
   async function refreshOutcomeData() {
-    const [nextApplications, nextAnalytics, nextUsage] = await Promise.all([
+    const [nextApplications, nextAnalytics, nextUsage, nextAgentEvents] = await Promise.all([
       api.listApplications(),
       api.getApplicationAnalytics(),
-      api.getLlmUsage()
+      api.getLlmUsage(),
+      api.getAgentEvents()
     ]);
     setApplications(nextApplications);
     setAnalytics(nextAnalytics);
     setUsage(nextUsage);
+    setAgentEvents(nextAgentEvents);
+  }
+
+  async function refreshAgentEvents() {
+    try {
+      const nextAgentEvents = await api.getAgentEvents();
+      setAgentEvents(nextAgentEvents);
+    } catch {
+      // Keep the inferred frontend status available if the backend is still starting.
+    }
   }
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
@@ -649,7 +672,7 @@ function App() {
         <Panel title="Agent 状态" kicker="Runtime Trace">
           <div className="agent-monitor-head">
             <span>当前运行：{runningAgent ?? "无"}</span>
-            <b>当前任务总成本 {usageCards.totalCost}</b>
+            <b>当前任务总成本 {agentCost}</b>
           </div>
           <div className="agent-status-grid">
             {agentRows.map((row) => (

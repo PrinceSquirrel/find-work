@@ -14,6 +14,7 @@ import type {
   SearchRunRequest,
   TailorBundle
 } from "../types";
+import type { BackendAgentEventsSnapshot } from "./dashboard";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
@@ -124,6 +125,10 @@ export const api = {
 
   getLlmUsage(): Promise<LLMUsageSummary> {
     return request<LLMUsageSummary>("/api/metrics/llm-usage");
+  },
+
+  getAgentEvents(): Promise<BackendAgentEventsSnapshot> {
+    return request<BackendAgentEventsSnapshot>("/api/agent-events");
   }
 };
 

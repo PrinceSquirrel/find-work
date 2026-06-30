@@ -4,7 +4,7 @@ Updated: 2026-06-30 Asia/Shanghai
 
 ## 当前真实状态
 
-当前项目已经初始化为本地 Git 仓库，默认分支为 `main`。项目是可运行的本地单用户 MVP，不是完整企业级成品。后端 FastAPI、SQLite、前端 React/Vite、demo 搜索闭环、模型/API 配置、CDP 浏览器会话检测、一键启动 CDP 浏览器、只读岗位提取、browser_cdp 搜索入库、提取诊断结构化、前端诊断展示、只读投递状态同步建议、前端人工确认同步、单岗位材料生成的 OpenAI-compatible LLM 最小闭环，以及 LLM usage 的 status/error 可观察字段已经具备。
+当前项目已经初始化为本地 Git 仓库，默认分支为 `main`。项目是可运行的本地单用户 MVP，不是完整企业级成品。后端 FastAPI、SQLite、前端 React/Vite、demo 搜索闭环、模型/API 配置、CDP 浏览器会话检测、一键启动 CDP 浏览器、只读岗位提取、browser_cdp 搜索入库、提取诊断结构化、前端诊断展示、只读投递状态同步建议、前端人工确认同步、单岗位材料生成的 OpenAI-compatible LLM 最小闭环、LLM usage 的 status/error 可观察字段、最小模型路由策略、后端 Agent 状态事件接口、前端 Agent 状态轮询展示、Agent 失败事件可视化，以及 Orchestrator 最小编排摘要已经具备。
 
 真实平台能力仍是“用户打开并登录平台页面后，系统只读提取当前页面可见数据”。系统不会自动登录、不会绕过验证码、不会保存 Cookie/密码、不会未经确认投递，也不会在同步时静默覆盖用户手工维护的投递状态。
 
@@ -29,10 +29,12 @@ Updated: 2026-06-30 Asia/Shanghai
   - `GET /api/platform-sessions`
   - `POST /api/platform-jobs/extract`
   - `POST /api/browser/launch-cdp`
+  - `GET /api/agent-events`
 - 前端工作台：
   - 简历上传、搜索任务、岗位列表、Agent 状态区域、投递结果表、进展看板、成本看板。
   - 模型/API 配置、CDP 会话状态、只读岗位提取结果、岗位提取诊断展示。
   - 投递同步建议展示与人工确认更新。
+  - Agent 状态区已接入 `/api/agent-events`，初始化和每 5 秒轮询后端真实事件。
 - 阶段 2A：搜索模式隔离，`demo` 与 `browser_cdp` 分开，真实模式不回退 demo。
 - 阶段 2B：只读 CDP 岗位提取接口。
 - 阶段 2C：前端展示搜索模式、平台会话和提取候选岗位。
@@ -54,13 +56,38 @@ Updated: 2026-06-30 Asia/Shanghai
   - 真实 LLM 成功记录标记为 `success`。
   - LLM 失败回退会写入 `failed` usage，并记录安全截断后的错误信息。
   - `/api/metrics/llm-usage` 的 `by_agent` 增加 `success_calls`、`estimated_calls`、`failed_calls`。
+- 阶段 4C：模型路由最小策略。
+  - 新增 `ModelRouterService`，集中决定 Agent 使用外部模型、本地估算或本地规则。
+  - `ApplicationWriterAgent` 仅在模型配置启用、非估算模式且 API key 环境变量可用时走外部 OpenAI-compatible 模型。
+  - `ReviewAgent` 在 4C 固定走本地规则审核，不消耗外部模型 token。
+  - 材料生成接口返回的 `review.llm` 元数据包含 `route` 和 `review_route`，方便前端或调试时观察路由决策。
+- 阶段 4D：Agent 状态事件流最小闭环。
+  - 新增轻量 `EventStreamService`，先采用本地单用户进程内事件缓存，不引入额外依赖。
+  - 后端在简历解析、岗位搜索、岗位匹配、材料生成、审核几个关键步骤记录 `running/success/failed` 事件。
+  - 新增 `GET /api/agent-events`，返回 `current_running_agent`、每个 Agent 最新状态、事件列表和当前任务总成本。
+  - 事件包含当前步骤、输入摘要、输出摘要、错误信息、token 和成本字段，供前端后续轮询展示。
+- 阶段 4E：前端 Agent 状态轮询接入。
+  - `frontend/src/lib/api.ts` 新增 `getAgentEvents()`，读取后端 Agent 事件快照。
+  - `frontend/src/lib/dashboard.ts` 新增后端事件快照到 Agent 状态卡片的转换逻辑。
+  - `frontend/src/App.tsx` 在初始化、业务刷新和每 5 秒轮询时刷新 Agent 事件。
+  - Agent 状态区域优先显示后端真实事件；后端尚未就绪时保留原有前端推断兜底。
+- 阶段 4F：Agent 失败事件补齐与前端错误态验证。
+  - `browser_cdp` 搜索缺少平台标签页时，`JobSearchAgent` 会记录 `failed` 事件和错误摘要。
+  - 浏览器岗位提取失败时，`JobSearchAgent` 最新状态会从 `running` 正确落到 `failed`。
+  - 外部 LLM 材料生成失败并本地回退时，接口仍返回本地材料，但 `ApplicationWriterAgent` 状态会标记为 `failed` 并保留错误信息。
+  - 前端 Agent 状态卡在 failed 事件没有 `error` 字段时，会用 `output_summary` 或步骤名兜底显示错误摘要。
+- 阶段 5A：Orchestrator 最小编排骨架。
+  - 新增 `OrchestratorService`，负责创建任务、记录 Agent 步骤、结束任务，并把步骤归档到任务摘要。
+  - `JobApplicationService` 的简历解析、岗位搜索、材料生成/审核三个主流程已接入 Orchestrator。
+  - `GET /api/agent-events` 继续返回原有 Agent 事件字段，同时新增 `orchestrator` 摘要，包含 `current_task_id`、`last_task` 和近期任务列表。
+  - 当前 Orchestrator 只做本地单进程任务摘要，不做并行调度、持久化、重试或自动投递。
 
 ## 未完成
 
-- “模型自动选择”尚未实现策略路由；当前仍使用当前启用的 provider/model。
+- “模型自动选择”已有最小策略路由，但尚未实现多模型池、按成本/失败率自动切换、按 Agent 配置不同模型。
 - 多 Agent 当前是模块拆分，不是可并行调度运行时。
-- `JobSearchAgent`/`Orchestrator`/`EventStreamService` 尚未按新版架构完整落地。
-- 前端 Agent 状态还不是后端 SSE/WebSocket 实时推送。
+- `JobSearchAgent` 尚未拆成独立任务级 Agent；Orchestrator 已有最小骨架，但尚未持久化、重试、并行调度或任务恢复。
+- `EventStreamService` 目前是进程内最小事件缓存，尚未持久化，也不是 SSE/WebSocket 实时推送。
 - 浏览器自动化只做 CDP 只读提取和启动，不做自动点击、自动投递或自动打招呼。
 - 没有真实 BOSS/实习僧页面回归样例快照，DOM 和状态关键词仍需在用户登录后的真实页面上继续校验。
 - 没有完整数据库迁移系统、外键约束、并发保护、审计日志和密钥管理。
@@ -75,29 +102,54 @@ Updated: 2026-06-30 Asia/Shanghai
 
 ## 下一步任务
 
-建议进入 4C：模型路由最小策略。
+建议进入 5B：Orchestrator 任务状态持久化草案。
 
-目标：实现一个小型 `ModelRouterService`，按 Agent/任务选择模型配置。第一步只区分本地估算、ApplicationWriter 外部模型、Review 本地规则，不做复杂多模型池。
+目标：不改变前端交互，先设计并落地最小数据库表或存储接口，用于保存 Orchestrator 任务状态和步骤摘要，避免服务重启后任务状态全部丢失。
 
 预计文件控制在 3-5 个：
 
-- `backend/app/services/model_router_service.py`
-- `backend/app/services/job_application_service.py`
+- `backend/app/storage.py`
+- `backend/app/services/orchestrator_service.py`
 - `backend/tests/test_api_flow.py`
 - `docs/CODEX_STATUS.md`
 
-浏览器中应该看到：模型配置启用时，材料生成仍可调用外部模型；成本看板能继续区分 estimated/success/failed 调用。
+浏览器中应该看到：前端交互暂时不变；后端 `/api/agent-events` 的 `orchestrator` 摘要在服务运行期间保持稳定，下一阶段再考虑前端展示任务 ID。
 
 ## 最近修改文件
 
-- `backend/app/schemas.py`
-- `backend/app/storage.py`
-- `backend/app/services/metrics_service.py`
+- `backend/app/services/model_router_service.py`
+- `backend/app/services/event_stream_service.py`
+- `backend/app/services/orchestrator_service.py`
 - `backend/app/services/job_application_service.py`
+- `backend/app/main.py`
 - `backend/tests/test_api_flow.py`
+- `frontend/src/lib/api.ts`
+- `frontend/src/lib/dashboard.ts`
+- `frontend/src/lib/dashboard.test.ts`
+- `frontend/src/App.tsx`
 - `docs/CODEX_STATUS.md`
 
 ## 最近验证
 
-- `python -m pytest -q`：通过，27 个测试。
+- 5A 红灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_agent_events_endpoint_reports_real_backend_steps -q`：按预期失败，暴露 `/api/agent-events` 缺少 `orchestrator` 摘要。
+- 5A 绿灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_agent_events_endpoint_reports_real_backend_steps -q`：通过。
+  - `python -m pytest backend\tests\test_api_flow.py::test_browser_cdp_search_mode_requires_detected_platform_tab backend\tests\test_api_flow.py::test_browser_cdp_search_mode_reports_extraction_failure_without_demo_jobs backend\tests\test_api_flow.py::test_tailor_falls_back_locally_when_openai_compatible_model_fails backend\tests\test_api_flow.py::test_agent_events_endpoint_reports_real_backend_steps -q`：通过，4 个测试。
+- 红灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_browser_cdp_search_mode_requires_detected_platform_tab backend\tests\test_api_flow.py::test_browser_cdp_search_mode_reports_extraction_failure_without_demo_jobs backend\tests\test_api_flow.py::test_tailor_falls_back_locally_when_openai_compatible_model_fails -q`：按预期失败，暴露缺少 failed 事件/错误摘要兜底。
+  - `npm test -- --run`：按预期失败，暴露前端 failed 事件缺少 `output_summary` 兜底。
+- 4F 绿灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_browser_cdp_search_mode_requires_detected_platform_tab backend\tests\test_api_flow.py::test_browser_cdp_search_mode_reports_extraction_failure_without_demo_jobs backend\tests\test_api_flow.py::test_tailor_falls_back_locally_when_openai_compatible_model_fails -q`：通过，3 个测试。
+  - `npm test -- --run`：通过，7 个前端测试。
+  - `python -m pytest -q`：通过，29 个后端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+- `python -m pytest -q`：通过，29 个测试。
 - `git push -u origin main`：通过，`main` 已推送到 `PrinceSquirrel/find-work`。
+- `python -m pytest backend\tests\test_api_flow.py::test_tailor_routes_application_writer_through_model_router -q`：通过。
+- `python -m pytest backend\tests\test_api_flow.py::test_agent_events_endpoint_reports_real_backend_steps -q`：通过。
+- `npm test -- --run`：通过，7 个前端测试。
+- `npm run lint`：通过。
+- `npm run build`：通过。
+- `python -m pytest -q`：通过，29 个后端测试。

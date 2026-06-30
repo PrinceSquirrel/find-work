@@ -131,6 +131,10 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     def llm_usage():
         return app.state.service.llm_usage_summary()
 
+    @app.get("/api/agent-events")
+    def agent_events():
+        return app.state.service.agent_events_summary()
+
     return app
 
 

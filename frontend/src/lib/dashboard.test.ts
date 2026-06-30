@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildAgentStatusRows,
+  buildAgentStatusRowsFromEvents,
   getAllowedNextStatuses,
   getRatePercent,
   getStatusTone,
@@ -142,5 +143,48 @@ describe("dashboard helpers", () => {
     expect(rows.find((row) => row.agentName === "ResumeParserAgent")?.status).toBe("success");
     expect(rows.find((row) => row.agentName === "ApplicationWriterAgent")?.status).toBe("running");
     expect(rows.find((row) => row.agentName === "ApplicationWriterAgent")?.tokens).toBe(350);
+  });
+
+  it("builds agent status rows from backend event snapshots", () => {
+    const rows = buildAgentStatusRowsFromEvents({
+      current_running_agent: null,
+      total_cost_usd: 0.0024,
+      agents: [
+        {
+          id: 1,
+          agent_name: "ResumeParserAgent",
+          status: "success",
+          step: "parse resume",
+          input_summary: "resume.pdf",
+          output_summary: "resume_id=1",
+          error: "",
+          total_tokens: 120,
+          cost_usd: 0,
+          created_at: "2026-06-30T10:00:00Z"
+        },
+        {
+          id: 2,
+          agent_name: "ApplicationWriterAgent",
+          status: "failed",
+          step: "generate application materials",
+          input_summary: "job_id=8",
+          output_summary: "fallback used: upstream timeout",
+          error: "",
+          total_tokens: 0,
+          cost_usd: 0,
+          created_at: "2026-06-30T10:01:00Z"
+        }
+      ],
+      events: []
+    });
+
+    expect(rows).toHaveLength(5);
+    expect(rows.find((row) => row.agentName === "ResumeParserAgent")?.currentStep).toBe("parse resume");
+    expect(rows.find((row) => row.agentName === "ResumeParserAgent")?.tokens).toBe(120);
+    expect(rows.find((row) => row.agentName === "ApplicationWriterAgent")?.status).toBe("failed");
+    expect(rows.find((row) => row.agentName === "ApplicationWriterAgent")?.errorMessage).toBe(
+      "fallback used: upstream timeout"
+    );
+    expect(rows.find((row) => row.agentName === "ReviewAgent")?.status).toBe("pending");
   });
 });

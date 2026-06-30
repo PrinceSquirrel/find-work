@@ -257,6 +257,10 @@ def test_browser_cdp_search_mode_requires_detected_platform_tab(tmp_path, monkey
     assert response.status_code == 400
     assert "browser_cdp search requires detected platform tabs" in response.json()["detail"]
     assert client.get("/api/jobs").json() == []
+    agent_events = client.get("/api/agent-events").json()
+    agents = {agent["agent_name"]: agent for agent in agent_events["agents"]}
+    assert agents["JobSearchAgent"]["status"] == "failed"
+    assert "browser_cdp search requires detected platform tabs" in agents["JobSearchAgent"]["error"]
 
 
 def test_browser_cdp_search_mode_saves_extracted_jobs_without_demo_fallback(tmp_path, monkeypatch):
@@ -399,6 +403,10 @@ def test_browser_cdp_search_mode_reports_extraction_failure_without_demo_jobs(tm
     assert "browser_cdp extraction failed" in response.json()["detail"]
     assert "页面结构变化" in response.json()["detail"]
     assert client.get("/api/jobs").json() == []
+    agent_events = client.get("/api/agent-events").json()
+    agents = {agent["agent_name"]: agent for agent in agent_events["agents"]}
+    assert agents["JobSearchAgent"]["status"] == "failed"
+    assert "browser_cdp extraction failed" in agents["JobSearchAgent"]["error"]
 
 
 def test_model_config_can_be_saved_without_exposing_api_key(tmp_path, monkeypatch):
@@ -517,6 +525,146 @@ def test_tailor_uses_enabled_openai_compatible_model_and_records_usage(tmp_path,
     assert row == ("openai-compatible", "deepseek-chat", 120, 60, 0, 0.00024)
 
 
+def test_tailor_routes_application_writer_through_model_router(tmp_path, monkeypatch):
+    from app.services.model_router_service import ModelRoute
+
+    class FakeLlmResult:
+        content = json.dumps(
+            {
+                "resume_text": "Router LLM resume keeps Python and FastAPI.",
+                "greeting_message": "Router LLM greeting.",
+                "diff_summary": [],
+                "resume_risk_flags": [],
+                "greeting_risk_flags": [],
+                "tone": "professional",
+            },
+        )
+        provider = "openai-compatible"
+        model = "deepseek-chat"
+        prompt_tokens = 30
+        completion_tokens = 12
+        duration_ms = 40
+        estimated = False
+
+    class FakeModelRouterService:
+        requested_agents = []
+
+        def route_for_agent(self, agent_name, config):
+            self.requested_agents.append(agent_name)
+            if agent_name == "ApplicationWriterAgent":
+                return ModelRoute(
+                    agent_name=agent_name,
+                    mode="external",
+                    provider=config.provider,
+                    model=config.model,
+                    reason="application writing uses configured external model",
+                )
+            return ModelRoute(
+                agent_name=agent_name,
+                mode="local_rule",
+                provider="local",
+                model="local-rule",
+                reason="review stays local in 4C",
+            )
+
+    class FakeOpenAICompatibleClient:
+        def generate_application_materials(self, config, resume, job):
+            return FakeLlmResult()
+
+    monkeypatch.setenv("AGENT_BUSINESS_TEST_API_KEY", "secret-value-that-must-not-leak")
+    monkeypatch.setattr(job_application_service, "ModelRouterService", FakeModelRouterService, raising=False)
+    monkeypatch.setattr(job_application_service, "OpenAICompatibleClient", FakeOpenAICompatibleClient, raising=False)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+    client.put(
+        "/api/model-config",
+        json={
+            "provider": "openai-compatible",
+            "model": "deepseek-chat",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key_env_var": "AGENT_BUSINESS_TEST_API_KEY",
+            "enabled": True,
+            "estimation_only": False,
+            "timeout_ms": 45000,
+            "input_price_per_million": 1.0,
+            "output_price_per_million": 2.0,
+        },
+    )
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "Skills: Python, FastAPI, React".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+    client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python intern"],
+            "city": "Shanghai",
+            "platforms": ["boss"],
+        },
+    )
+    job_id = client.get("/api/jobs").json()[0]["id"]
+
+    response = client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["review"]["llm"]["route"]["mode"] == "external"
+    assert payload["review"]["llm"]["review_route"]["mode"] == "local_rule"
+    assert FakeModelRouterService.requested_agents == ["ApplicationWriterAgent", "ReviewAgent"]
+
+
+def test_agent_events_endpoint_reports_real_backend_steps(tmp_path):
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "Skills: Python, FastAPI, React".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+    client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python intern"],
+            "city": "Shanghai",
+            "platforms": ["boss"],
+        },
+    )
+    job_id = client.get("/api/jobs").json()[0]["id"]
+    client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+
+    response = client.get("/api/agent-events")
+
+    assert response.status_code == 200
+    payload = response.json()
+    agents = {agent["agent_name"]: agent for agent in payload["agents"]}
+    assert payload["current_running_agent"] is None
+    assert agents["ResumeParserAgent"]["status"] == "success"
+    assert agents["JobSearchAgent"]["status"] == "success"
+    assert agents["JobMatchAgent"]["status"] == "success"
+    assert agents["ApplicationWriterAgent"]["status"] == "success"
+    assert agents["ReviewAgent"]["status"] == "success"
+    assert agents["ApplicationWriterAgent"]["input_summary"]
+    assert agents["ReviewAgent"]["output_summary"]
+    assert payload["total_cost_usd"] >= 0
+    orchestrator = payload["orchestrator"]
+    assert orchestrator["current_task_id"] is None
+    assert orchestrator["last_task"]["task_name"] == "application.materials"
+    assert orchestrator["last_task"]["status"] == "success"
+    assert [
+        f"{step['agent_name']}:{step['status']}"
+        for step in orchestrator["last_task"]["steps"]
+    ] == [
+        "ApplicationWriterAgent:running",
+        "ApplicationWriterAgent:success",
+        "ReviewAgent:running",
+        "ReviewAgent:success",
+    ]
+
+
 def test_tailor_falls_back_locally_when_openai_compatible_model_fails(tmp_path, monkeypatch):
     class FakeOpenAICompatibleClient:
         def generate_application_materials(self, config, resume, job):
@@ -566,6 +714,10 @@ def test_tailor_falls_back_locally_when_openai_compatible_model_fails(tmp_path, 
     assert payload["review"]["llm"]["status"] == "fallback"
     assert "upstream timeout" in payload["review"]["llm"]["error"]
     assert "secret-value-that-must-not-leak" not in str(payload)
+    agent_events = client.get("/api/agent-events").json()
+    agents = {agent["agent_name"]: agent for agent in agent_events["agents"]}
+    assert agents["ApplicationWriterAgent"]["status"] == "failed"
+    assert "upstream timeout" in agents["ApplicationWriterAgent"]["error"]
     usage = client.get("/api/metrics/llm-usage").json()
     writer_bucket = usage["by_agent"]["ApplicationWriterAgent"]
     assert writer_bucket["failed_calls"] == 1
