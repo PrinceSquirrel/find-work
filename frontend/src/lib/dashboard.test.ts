@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAgentStatusRows,
   buildAgentStatusRowsFromEvents,
+  buildOrchestratorSummary,
   getAllowedNextStatuses,
   getRatePercent,
   getStatusTone,
@@ -186,5 +187,61 @@ describe("dashboard helpers", () => {
       "fallback used: upstream timeout"
     );
     expect(rows.find((row) => row.agentName === "ReviewAgent")?.status).toBe("pending");
+  });
+
+  it("summarizes backend orchestrator tasks for the runtime panel", () => {
+    const summary = buildOrchestratorSummary({
+      current_running_agent: null,
+      total_cost_usd: 0.0024,
+      agents: [],
+      events: [],
+      orchestrator: {
+        current_task_id: null,
+        last_task: {
+          id: 3,
+          task_name: "application.materials",
+          input_summary: "resume_id=1; job_id=8",
+          status: "success",
+          error: "",
+          started_at: "2026-06-30T10:00:00Z",
+          completed_at: "2026-06-30T10:01:00Z",
+          steps: [
+            {
+              event_id: 7,
+              agent_name: "ApplicationWriterAgent",
+              status: "running",
+              step: "generate application materials",
+              input_summary: "job_id=8",
+              output_summary: "",
+              error: "",
+              total_tokens: 0,
+              cost_usd: 0
+            },
+            {
+              event_id: 8,
+              agent_name: "ReviewAgent",
+              status: "success",
+              step: "review generated materials",
+              input_summary: "job_id=8",
+              output_summary: "truth_check_passed=True",
+              error: "",
+              total_tokens: 0,
+              cost_usd: 0
+            }
+          ]
+        },
+        tasks: []
+      }
+    });
+
+    expect(summary).toEqual({
+      taskName: "application.materials",
+      status: "success",
+      stepCount: 2,
+      currentTaskId: null,
+      lastStep: "ReviewAgent / review generated materials",
+      errorMessage: "",
+      detail: "application.materials / success / 2 steps"
+    });
   });
 });

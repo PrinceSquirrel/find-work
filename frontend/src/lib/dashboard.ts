@@ -52,11 +52,51 @@ export interface BackendAgentEvent {
   created_at: string | null;
 }
 
+export interface BackendOrchestratorStep {
+  event_id: number;
+  agent_name: string;
+  status: string;
+  step: string;
+  input_summary: string;
+  output_summary: string;
+  error: string;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+export interface BackendOrchestratorTask {
+  id: number;
+  task_name: string;
+  input_summary: string;
+  status: string;
+  error: string;
+  started_at: string;
+  completed_at: string | null;
+  steps: BackendOrchestratorStep[];
+}
+
+export interface BackendOrchestratorSnapshot {
+  current_task_id: number | null;
+  last_task: BackendOrchestratorTask | null;
+  tasks: BackendOrchestratorTask[];
+}
+
 export interface BackendAgentEventsSnapshot {
   current_running_agent: string | null;
   total_cost_usd: number;
   agents: BackendAgentEvent[];
   events: BackendAgentEvent[];
+  orchestrator?: BackendOrchestratorSnapshot;
+}
+
+export interface OrchestratorSummary {
+  taskName: string;
+  status: string;
+  stepCount: number;
+  currentTaskId: number | null;
+  lastStep: string;
+  errorMessage: string;
+  detail: string;
 }
 
 const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
@@ -188,6 +228,25 @@ export function buildAgentStatusRowsFromEvents(snapshot: BackendAgentEventsSnaps
       tokens: event?.total_tokens ?? 0
     };
   });
+}
+
+export function buildOrchestratorSummary(snapshot: BackendAgentEventsSnapshot | null): OrchestratorSummary | null {
+  const task = snapshot?.orchestrator?.last_task;
+  if (!task) {
+    return null;
+  }
+  const lastStep = task.steps[task.steps.length - 1];
+  const errorStep = [...task.steps].reverse().find((step) => step.error);
+  const stepCount = task.steps.length;
+  return {
+    taskName: task.task_name,
+    status: task.status,
+    stepCount,
+    currentTaskId: snapshot?.orchestrator?.current_task_id ?? null,
+    lastStep: lastStep ? `${lastStep.agent_name} / ${lastStep.step}` : "暂无步骤",
+    errorMessage: task.error || errorStep?.error || "",
+    detail: `${task.task_name} / ${task.status} / ${stepCount} steps`
+  };
 }
 
 function normalizeAgentStatus(status: string): AgentRuntimeStatus {

@@ -4,7 +4,7 @@ Updated: 2026-06-30 Asia/Shanghai
 
 ## 当前真实状态
 
-当前项目已经初始化为本地 Git 仓库，默认分支为 `main`。项目是可运行的本地单用户 MVP，不是完整企业级成品。后端 FastAPI、SQLite、前端 React/Vite、demo 搜索闭环、模型/API 配置、CDP 浏览器会话检测、一键启动 CDP 浏览器、只读岗位提取、browser_cdp 搜索入库、提取诊断结构化、前端诊断展示、只读投递状态同步建议、前端人工确认同步、单岗位材料生成的 OpenAI-compatible LLM 最小闭环、LLM usage 的 status/error 可观察字段、最小模型路由策略、后端 Agent 状态事件接口、前端 Agent 状态轮询展示、Agent 失败事件可视化，以及 Orchestrator 最小编排摘要已经具备。
+当前项目已经初始化为本地 Git 仓库，默认分支为 `main`。项目是可运行的本地单用户 MVP，不是完整企业级成品。后端 FastAPI、SQLite、前端 React/Vite、demo 搜索闭环、模型/API 配置、CDP 浏览器会话检测、一键启动 CDP 浏览器、只读岗位提取、browser_cdp 搜索入库、提取诊断结构化、前端诊断展示、只读投递状态同步建议、前端人工确认同步、单岗位材料生成的 OpenAI-compatible LLM 最小闭环、LLM usage 的 status/error 可观察字段、最小模型路由策略、后端 Agent 状态事件接口、前端 Agent 状态轮询展示、Agent 失败事件可视化，以及 Orchestrator 最小编排摘要、SQLite 持久化草案和前端任务摘要展示已经具备。
 
 真实平台能力仍是“用户打开并登录平台页面后，系统只读提取当前页面可见数据”。系统不会自动登录、不会绕过验证码、不会保存 Cookie/密码、不会未经确认投递，也不会在同步时静默覆盖用户手工维护的投递状态。
 
@@ -81,12 +81,22 @@ Updated: 2026-06-30 Asia/Shanghai
   - `JobApplicationService` 的简历解析、岗位搜索、材料生成/审核三个主流程已接入 Orchestrator。
   - `GET /api/agent-events` 继续返回原有 Agent 事件字段，同时新增 `orchestrator` 摘要，包含 `current_task_id`、`last_task` 和近期任务列表。
   - 当前 Orchestrator 只做本地单进程任务摘要，不做并行调度、持久化、重试或自动投递。
+- 阶段 5B：Orchestrator 任务状态持久化草案。
+  - SQLite 新增 `orchestrator_tasks` 和 `orchestrator_steps` 两张表，用于保存任务摘要和 Agent 步骤摘要。
+  - `OrchestratorService` 启动时会从 SQLite 恢复最近任务，服务重启后 `/api/agent-events` 仍可返回 `orchestrator.last_task`。
+  - `start_task`、`record_step`、`finish_task` 已同步写入 SQLite，同时保留进程内快照。
+  - 当前只持久化摘要，不持久化完整 `EventStreamService` 事件流，也不做任务恢复执行、重试或并发调度。
+- 阶段 5C：前端展示 Orchestrator 任务摘要。
+  - `frontend/src/lib/dashboard.ts` 新增 Orchestrator 后端快照类型和 `buildOrchestratorSummary()` 转换函数。
+  - Agent 状态区域新增最近编排任务摘要，展示任务名、状态、步骤数、最近步骤和错误信息。
+  - 样式保持为紧凑状态条，不改变岗位表、投递结果表、成本看板和材料人审流程。
+  - 当前只展示最近任务摘要，不提供任务详情弹窗、任务 ID 搜索、重试按钮或恢复执行入口。
 
 ## 未完成
 
 - “模型自动选择”已有最小策略路由，但尚未实现多模型池、按成本/失败率自动切换、按 Agent 配置不同模型。
 - 多 Agent 当前是模块拆分，不是可并行调度运行时。
-- `JobSearchAgent` 尚未拆成独立任务级 Agent；Orchestrator 已有最小骨架，但尚未持久化、重试、并行调度或任务恢复。
+- `JobSearchAgent` 尚未拆成独立任务级 Agent；Orchestrator 已有最小骨架和任务摘要持久化，但尚未实现重试、并行调度或任务恢复执行。
 - `EventStreamService` 目前是进程内最小事件缓存，尚未持久化，也不是 SSE/WebSocket 实时推送。
 - 浏览器自动化只做 CDP 只读提取和启动，不做自动点击、自动投递或自动打招呼。
 - 没有真实 BOSS/实习僧页面回归样例快照，DOM 和状态关键词仍需在用户登录后的真实页面上继续校验。
@@ -102,18 +112,19 @@ Updated: 2026-06-30 Asia/Shanghai
 
 ## 下一步任务
 
-建议进入 5B：Orchestrator 任务状态持久化草案。
+建议进入 5D：任务详情接口与前端详情入口。
 
-目标：不改变前端交互，先设计并落地最小数据库表或存储接口，用于保存 Orchestrator 任务状态和步骤摘要，避免服务重启后任务状态全部丢失。
+目标：为 Orchestrator 增加最小任务详情读取能力，让前端可以从最近任务摘要进入步骤详情，为后续失败重试和恢复执行入口做准备。
 
 预计文件控制在 3-5 个：
 
-- `backend/app/storage.py`
-- `backend/app/services/orchestrator_service.py`
-- `backend/tests/test_api_flow.py`
+- `backend/app/main.py`
+- `backend/app/services/job_application_service.py`
+- `frontend/src/lib/dashboard.ts`
+- `frontend/src/App.tsx`
 - `docs/CODEX_STATUS.md`
 
-浏览器中应该看到：前端交互暂时不变；后端 `/api/agent-events` 的 `orchestrator` 摘要在服务运行期间保持稳定，下一阶段再考虑前端展示任务 ID。
+浏览器中应该看到：最近编排任务摘要旁可查看任务步骤详情，但仍不自动重试、不自动恢复执行。
 
 ## 最近修改文件
 
@@ -121,16 +132,36 @@ Updated: 2026-06-30 Asia/Shanghai
 - `backend/app/services/event_stream_service.py`
 - `backend/app/services/orchestrator_service.py`
 - `backend/app/services/job_application_service.py`
+- `backend/app/storage.py`
 - `backend/app/main.py`
 - `backend/tests/test_api_flow.py`
 - `frontend/src/lib/api.ts`
 - `frontend/src/lib/dashboard.ts`
 - `frontend/src/lib/dashboard.test.ts`
 - `frontend/src/App.tsx`
+- `frontend/src/styles.css`
 - `docs/CODEX_STATUS.md`
 
 ## 最近验证
 
+- 5C 红灯验证：
+  - `npm test -- --run`：按预期失败，暴露缺少 `buildOrchestratorSummary()`。
+- 5C 绿灯验证：
+  - `npm test -- --run`：通过，8 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+  - `python -m pytest -q`：通过，30 个后端测试。
+  - `git diff --check`：无空白错误，仅 Windows 行尾转换提示。
+- 5B 红灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_orchestrator_task_summary_survives_service_restart -q`：按预期失败，暴露服务重启后 `orchestrator.last_task` 为 `None`。
+- 5B 绿灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_orchestrator_task_summary_survives_service_restart -q`：通过。
+  - `python -m pytest backend\tests\test_api_flow.py::test_agent_events_endpoint_reports_real_backend_steps backend\tests\test_api_flow.py::test_browser_cdp_search_mode_requires_detected_platform_tab backend\tests\test_api_flow.py::test_browser_cdp_search_mode_reports_extraction_failure_without_demo_jobs backend\tests\test_api_flow.py::test_tailor_falls_back_locally_when_openai_compatible_model_fails backend\tests\test_api_flow.py::test_orchestrator_task_summary_survives_service_restart -q`：通过，5 个测试。
+  - `python -m pytest -q`：通过，30 个后端测试。
+  - `npm test -- --run`：通过，7 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+  - `git diff --check`：无空白错误，仅 Windows 行尾转换提示。
 - 5A 红灯验证：
   - `python -m pytest backend\tests\test_api_flow.py::test_agent_events_endpoint_reports_real_backend_steps -q`：按预期失败，暴露 `/api/agent-events` 缺少 `orchestrator` 摘要。
 - 5A 绿灯验证：

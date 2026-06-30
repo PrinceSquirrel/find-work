@@ -129,6 +129,29 @@ class SQLiteStore:
                     output_price_per_million REAL NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS orchestrator_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_name TEXT NOT NULL,
+                    input_summary TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS orchestrator_steps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    event_id INTEGER NOT NULL,
+                    agent_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    step TEXT NOT NULL,
+                    input_summary TEXT NOT NULL,
+                    output_summary TEXT NOT NULL,
+                    error TEXT NOT NULL,
+                    total_tokens INTEGER NOT NULL,
+                    cost_usd REAL NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_llm_usage_columns(conn)
@@ -494,6 +517,104 @@ class SQLiteStore:
             for row in rows
         ]
 
+    def create_orchestrator_task(
+        self,
+        task_name: str,
+        input_summary: str,
+        status: str,
+        error: str,
+        started_at: datetime,
+        completed_at: datetime | None,
+    ) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO orchestrator_tasks (
+                    task_name, input_summary, status, error, started_at, completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_name,
+                    input_summary,
+                    status,
+                    error,
+                    started_at.isoformat(),
+                    completed_at.isoformat() if completed_at else None,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def update_orchestrator_task(
+        self,
+        task_id: int,
+        status: str,
+        error: str,
+        completed_at: datetime | None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE orchestrator_tasks
+                SET status = ?, error = ?, completed_at = ?
+                WHERE id = ?
+                """,
+                (status, error, completed_at.isoformat() if completed_at else None, task_id),
+            )
+
+    def save_orchestrator_step(
+        self,
+        task_id: int,
+        event_id: int,
+        agent_name: str,
+        status: str,
+        step: str,
+        input_summary: str,
+        output_summary: str,
+        error: str,
+        total_tokens: int,
+        cost_usd: float,
+        created_at: datetime,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO orchestrator_steps (
+                    task_id, event_id, agent_name, status, step, input_summary,
+                    output_summary, error, total_tokens, cost_usd, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    event_id,
+                    agent_name,
+                    status,
+                    step,
+                    input_summary,
+                    output_summary,
+                    error,
+                    total_tokens,
+                    cost_usd,
+                    created_at.isoformat(),
+                ),
+            )
+
+    def list_orchestrator_tasks(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            task_rows = conn.execute(
+                "SELECT * FROM orchestrator_tasks ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            tasks = [self._orchestrator_task_row_to_dict(row) for row in reversed(task_rows)]
+            for task in tasks:
+                step_rows = conn.execute(
+                    "SELECT * FROM orchestrator_steps WHERE task_id = ? ORDER BY id",
+                    (task["id"],),
+                ).fetchall()
+                task["steps"] = [self._orchestrator_step_row_to_dict(row) for row in step_rows]
+        return tasks
+
     def _default_model_config(self) -> ModelConfig:
         api_key_env_var = os.getenv("OPENAI_API_KEY_ENV_VAR", "OPENAI_API_KEY")
         return ModelConfig(
@@ -559,4 +680,29 @@ class SQLiteStore:
             "job_type": row["job_type"],
             "created_at": row["created_at"],
             "match": json.loads(row["match_json"]),
+        }
+
+    def _orchestrator_task_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "task_name": row["task_name"],
+            "input_summary": row["input_summary"],
+            "status": row["status"],
+            "error": row["error"],
+            "started_at": row["started_at"],
+            "completed_at": row["completed_at"],
+            "steps": [],
+        }
+
+    def _orchestrator_step_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "event_id": row["event_id"],
+            "agent_name": row["agent_name"],
+            "status": row["status"],
+            "step": row["step"],
+            "input_summary": row["input_summary"],
+            "output_summary": row["output_summary"],
+            "error": row["error"],
+            "total_tokens": row["total_tokens"],
+            "cost_usd": row["cost_usd"],
         }

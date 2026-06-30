@@ -665,6 +665,45 @@ def test_agent_events_endpoint_reports_real_backend_steps(tmp_path):
     ]
 
 
+def test_orchestrator_task_summary_survives_service_restart(tmp_path):
+    db_path = tmp_path / "agent-business.sqlite3"
+    app = create_app(db_path=db_path)
+    client = TestClient(app)
+
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "Skills: Python, FastAPI, React".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+    client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python intern"],
+            "city": "Shanghai",
+            "platforms": ["boss"],
+        },
+    )
+    job_id = client.get("/api/jobs").json()[0]["id"]
+    client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+
+    restarted_app = create_app(db_path=db_path)
+    restarted_client = TestClient(restarted_app)
+    response = restarted_client.get("/api/agent-events")
+
+    assert response.status_code == 200
+    orchestrator = response.json()["orchestrator"]
+    assert orchestrator["current_task_id"] is None
+    assert orchestrator["last_task"]["task_name"] == "application.materials"
+    assert orchestrator["last_task"]["status"] == "success"
+    assert [step["agent_name"] for step in orchestrator["last_task"]["steps"]] == [
+        "ApplicationWriterAgent",
+        "ApplicationWriterAgent",
+        "ReviewAgent",
+        "ReviewAgent",
+    ]
+
+
 def test_tailor_falls_back_locally_when_openai_compatible_model_fails(tmp_path, monkeypatch):
     class FakeOpenAICompatibleClient:
         def generate_application_materials(self, config, resume, job):

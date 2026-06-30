@@ -4,6 +4,7 @@ import { api } from "./lib/api";
 import {
   buildAgentStatusRows,
   buildAgentStatusRowsFromEvents,
+  buildOrchestratorSummary,
   clampPercent,
   formatDateTime,
   getAllowedNextStatuses,
@@ -172,6 +173,7 @@ function App() {
     [agentEvents, error, failedAgent, jobs.length, localRunningAgent, resume?.filename, searchCity, searchKeywords, selectedJob?.title, tailorBundles, usage]
   );
   const agentCost = agentEvents ? `$${agentEvents.total_cost_usd.toFixed(4)}` : usageCards.totalCost;
+  const orchestratorSummary = useMemo(() => buildOrchestratorSummary(agentEvents), [agentEvents]);
 
   async function refreshWorkspace() {
     setBusy((current) => ({ ...current, boot: true }));
@@ -674,6 +676,27 @@ function App() {
             <span>当前运行：{runningAgent ?? "无"}</span>
             <b>当前任务总成本 {agentCost}</b>
           </div>
+          {orchestratorSummary ? (
+            <div className={`orchestrator-summary status-${orchestratorSummary.status}`}>
+              <div>
+                <span>最近编排任务</span>
+                <b>{orchestratorSummary.taskName}</b>
+              </div>
+              <div>
+                <span>状态</span>
+                <b>{orchestratorSummary.status}</b>
+              </div>
+              <div>
+                <span>步骤</span>
+                <b>{orchestratorSummary.stepCount} steps</b>
+              </div>
+              <div>
+                <span>最近步骤</span>
+                <b>{orchestratorSummary.lastStep}</b>
+              </div>
+              {orchestratorSummary.errorMessage ? <em>错误：{orchestratorSummary.errorMessage}</em> : null}
+            </div>
+          ) : null}
           <div className="agent-status-grid">
             {agentRows.map((row) => (
               <article className={`agent-status-card status-${row.status}`} key={row.agentName}>

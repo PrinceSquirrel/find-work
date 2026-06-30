@@ -36,7 +36,7 @@ class JobApplicationService:
         self.review = ReviewAgent()
         self.metrics = MetricsService()
         self.event_stream = EventStreamService()
-        self.orchestrator = OrchestratorService(self.event_stream)
+        self.orchestrator = OrchestratorService(self.event_stream, store=store)
         self.model_router = ModelRouterService()
         self.llm_client = OpenAICompatibleClient()
         self.adapters = {
