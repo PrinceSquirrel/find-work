@@ -49,7 +49,7 @@ class JobApplicationService:
         self._record_agent_step(task_id, "ResumeParserAgent", "running", "parse resume", input_summary=filename)
         try:
             parsed = self.resume_parser.parse(filename, content)
-            stored = self.store.create_resume(parsed)
+            stored = self.store.create_resume(parsed, original_file_bytes=content)
             self._record_usage("ResumeParserAgent", filename, stored.raw_text)
             self._record_agent_step(
                 task_id,
@@ -202,7 +202,11 @@ class JobApplicationService:
             "extract browser jobs",
             input_summary=f"mode=browser_cdp; platforms={','.join(platforms)}",
         )
-        extraction_response = BrowserJobExtractorService().extract(platforms, limit=20)
+        extractor = BrowserJobExtractorService()
+        if hasattr(extractor, "search_and_extract"):
+            extraction_response = extractor.search_and_extract(platforms, keywords, city, limit=20)
+        else:
+            extraction_response = extractor.extract(platforms, limit=20)
         extracted_jobs = self._collect_extracted_jobs(extraction_response.extractions)
         run = self.store.create_search_run(
             SearchRun(
@@ -262,6 +266,8 @@ class JobApplicationService:
             description=candidate.description or candidate.title,
             url=candidate.url,
             job_type=candidate.job_type or "browser_cdp",
+            detail_status=candidate.detail_status,
+            detail_reason=candidate.detail_reason,
         )
 
     def _ensure_browser_platform_tabs(self, platforms: list[str]) -> None:
@@ -274,8 +280,35 @@ class JobApplicationService:
                 + ", ".join(missing)
             )
 
-    def list_jobs(self) -> list[dict[str, Any]]:
-        return self.store.list_jobs()
+    def list_jobs(self, search_run_id: int | None = None) -> list[dict[str, Any]]:
+        return self.store.list_jobs(search_run_id=search_run_id)
+
+    def refresh_job_detail(self, job_id: int) -> dict[str, Any]:
+        job = self.store.get_job(job_id)
+        if not job.url:
+            raise ValueError("Job has no source URL to refresh.")
+        candidate = BrowserJobExtractorService().refresh_job_detail(job.platform, job.url)
+        next_salary = self._prefer_refreshed_salary(candidate.salary, job.salary)
+        next_description = candidate.description.strip() or job.description
+        self.store.update_job_detail(
+            job_id,
+            salary=next_salary,
+            description=next_description,
+            detail_status=candidate.detail_status or job.detail_status,
+            detail_reason=candidate.detail_reason or job.detail_reason,
+        )
+        for stored_job in self.store.list_jobs(search_run_id=job.search_run_id):
+            if stored_job["id"] == job_id:
+                return stored_job
+        raise KeyError(f"Job {job_id} not found")
+
+    def _prefer_refreshed_salary(self, refreshed_salary: str, current_salary: str) -> str:
+        cleaned = refreshed_salary.strip()
+        if not cleaned:
+            return current_salary
+        if "读取失败" in cleaned or "未展示" in cleaned:
+            return current_salary or cleaned
+        return cleaned
 
     def tailor_for_job(self, job_id: int, resume_id: int) -> dict[str, Any]:
         resume = self.store.get_resume(resume_id)

@@ -432,6 +432,18 @@ label span,
   gap: 6px;
 }
 
+.diagnostic-details {
+  display: grid;
+  gap: 7px;
+}
+
+.diagnostic-details summary {
+  color: var(--green-deep);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+}
+
 .extraction-heading {
   align-items: center;
   display: flex;
@@ -855,6 +867,19 @@ label span,
   background: var(--amber-soft);
 }
 
+.pdf-download-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pdf-download-row span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .review-content section {
   border-top: 1px solid var(--line);
   padding-top: 10px;
@@ -888,6 +913,77 @@ pre {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.modal-backdrop {
+  background: rgba(20, 24, 22, 0.38);
+  inset: 0;
+  position: fixed;
+  z-index: 20;
+}
+
+.job-detail-modal {
+  background: var(--paper);
+  border-left: 2px solid var(--line-dark);
+  box-shadow: -12px 0 32px rgba(31, 36, 33, 0.18);
+  display: grid;
+  gap: 14px;
+  height: 100vh;
+  margin-left: auto;
+  max-width: 560px;
+  overflow: auto;
+  padding: 24px;
+  width: min(560px, 92vw);
+}
+
+.modal-heading {
+  align-items: start;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.modal-heading span {
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.modal-heading h2 {
+  font-size: 24px;
+  margin: 4px 0;
+}
+
+.modal-heading p {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.job-detail-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-recovery {
+  background: #f1eadb;
+  border-left: 4px solid var(--amber);
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+}
+
+.detail-recovery p {
+  margin: 0;
+}
+
+.job-detail-modal section {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
 }
 
 .status-pill {

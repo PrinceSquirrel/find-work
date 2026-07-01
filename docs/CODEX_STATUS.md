@@ -1,12 +1,12 @@
 # Codex Recovery Status
 
-Updated: 2026-06-30 Asia/Shanghai
+Updated: 2026-07-01 Asia/Shanghai
 
 ## 当前真实状态
 
-当前项目已经初始化为本地 Git 仓库，默认分支为 `main`。项目是可运行的本地单用户 MVP，不是完整企业级成品。后端 FastAPI、SQLite、前端 React/Vite、demo 搜索闭环、模型/API 配置、CDP 浏览器会话检测、一键启动 CDP 浏览器、只读岗位提取、browser_cdp 搜索入库、提取诊断结构化、前端诊断展示、只读投递状态同步建议、前端人工确认同步、单岗位材料生成的 OpenAI-compatible LLM 最小闭环、LLM usage 的 status/error 可观察字段、最小模型路由策略、后端 Agent 状态事件接口、前端 Agent 状态轮询展示、Agent 失败事件可视化，以及 Orchestrator 最小编排摘要、SQLite 持久化草案和前端任务摘要展示已经具备。
+当前项目已经初始化为本地 Git 仓库，默认分支为 `main`。项目是可运行的本地单用户 MVP，不是完整企业级成品。后端 FastAPI、SQLite、前端 React/Vite、demo 搜索闭环、模型/API 配置、CDP 浏览器会话检测、一键启动 CDP 浏览器、只读岗位提取、browser_cdp 搜索入库、CDP 控制网页搜索、提取诊断结构化、前端诊断展示、岗位详情弹窗、低质量 JD 人工补全提示、详情补全状态结构化、只读投递状态同步建议、前端人工确认同步、单岗位材料生成的 OpenAI-compatible LLM 最小闭环、LLM usage 的 status/error 可观察字段、最小模型路由策略、后端 Agent 状态事件接口、前端 Agent 状态轮询展示、Agent 失败事件可视化、Orchestrator 最小编排摘要、SQLite 持久化草案、前端任务摘要展示、任务步骤详情入口、失败任务人工重试边界提示、CDP 文本质量诊断、按 search_run 隔离岗位池、真实岗位一键导入、简历关键词推荐、薪资候选增强、详情页 JD/薪资补全回归、DOCX 模板保存、全简历可改写协议和模板化一页 PDF 下载已经具备。
 
-真实平台能力仍是“用户打开并登录平台页面后，系统只读提取当前页面可见数据”。系统不会自动登录、不会绕过验证码、不会保存 Cookie/密码、不会未经确认投递，也不会在同步时静默覆盖用户手工维护的投递状态。
+真实平台能力仍限定在“用户启动 CDP 浏览器并登录平台后，系统可用关键词/城市控制搜索页并只读提取当前可见岗位”。系统不会自动登录、不会绕过验证码、不会保存 Cookie/密码、不会未经确认投递或发送招呼语，也不会在同步时静默覆盖用户手工维护的投递状态。
 
 ## 已完成
 
@@ -28,6 +28,7 @@ Updated: 2026-06-30 Asia/Shanghai
   - `PUT /api/model-config`
   - `GET /api/platform-sessions`
   - `POST /api/platform-jobs/extract`
+  - `POST /api/platform-jobs/search`
   - `POST /api/browser/launch-cdp`
   - `GET /api/agent-events`
 - 前端工作台：
@@ -91,59 +92,248 @@ Updated: 2026-06-30 Asia/Shanghai
   - Agent 状态区域新增最近编排任务摘要，展示任务名、状态、步骤数、最近步骤和错误信息。
   - 样式保持为紧凑状态条，不改变岗位表、投递结果表、成本看板和材料人审流程。
   - 当前只展示最近任务摘要，不提供任务详情弹窗、任务 ID 搜索、重试按钮或恢复执行入口。
+- 阶段 5D：任务详情接口与前端详情入口。
+  - 新增 `GET /api/orchestrator/tasks/{task_id}`，返回指定 Orchestrator 任务及步骤详情，任务不存在时返回 404。
+  - Agent 状态区域的最近编排任务摘要旁新增“查看步骤/收起”入口。
+  - 前端点击“查看步骤”时读取任务详情接口，并展开 Agent、状态、步骤名和错误摘要。
+  - 当前仍不做任务重试、任务恢复执行或自动继续失败任务。
+- 阶段 5E：CDP 抽取文本质量修复。
+  - `BrowserExtractionDiagnostics` 新增 `text_quality_warnings`。
+  - CDP 抽取会识别 `□`、`�`、私用区字符和异常问号等污染文本。
+  - 污染的城市/薪资字段会隐藏为“城市未展示/薪资未展示”，标题和描述都不可读的候选会被丢弃。
+- 阶段 5F：真实搜索任务与岗位池隔离。
+  - `JobPosting` 和 `GET /api/jobs` 返回 `search_run_id`。
+  - `GET /api/jobs?search_run_id={id}` 只返回指定搜索任务的岗位。
+  - 前端创建搜索任务后只刷新本次 run 的岗位，避免旧 demo 结果混入。
+- 阶段 5G：前端一键导入真实岗位。
+  - 默认搜索模式改为 `browser_cdp`。
+  - 只读提取成功后显示“导入这批真实岗位到岗位池”按钮。
+  - 导入按钮复用 `POST /api/search-runs` 的 `browser_cdp` 入库路径，不写 demo fallback。
+- 阶段 5H：简历解析后自动推荐搜索关键词。
+  - `ResumeParserAgent` 在 `profile` 中返回 `suggested_keywords` 和 `suggested_city`。
+  - 前端上传简历成功后，在用户未手动改过搜索框时自动填入推荐关键词和城市。
+  - 推荐逻辑为本地规则，不调用 LLM。
+- 阶段 5I/5J：岗位定制简历 PDF 初版。
+  - 曾新增 `GET /api/tailored-resumes/{id}/pdf` 和前端下载入口。
+  - 初版 reportlab 重排式 PDF 已被 5N 的 DOCX 模板化一页 PDF 替代。
+- 阶段 5K：薪资提取增强。
+  - 新增 `SalaryExtractor`，从薪资选择器、属性文本、整张岗位卡片文本和脚本候选中提取可信薪资。
+  - 支持 `15-25K`、`200-300/天`、`薪资面议`、`13薪/14薪` 等常见格式。
+  - 污染薪资不再刷屏显示逐条 `hid polluted salary`，无法可信解析时统一显示“薪资读取失败”。
+- 阶段 5L：保存原始简历模板。
+  - `POST /api/resumes` 会保存 DOCX 原始 bytes、文件类型和模板可用状态。
+  - 仅 DOCX 支持模板化生成；PDF/TXT 或旧数据会返回“请重新上传 DOCX 简历以保留模板”。
+  - SQLite 老库启动时会自动补充模板相关列。
+- 阶段 5M：项目部分定制协议。
+  - `ApplicationWriterAgent` 输出 `project_rewrite + greeting + risk_flags`，兼容旧 `resume_text` 字段。
+  - LLM prompt 明确只改“项目经历/项目经验/项目实践”段落，不改姓名、电话、教育、技能、图片或排版。
+  - `ReviewAgent` 会检查定制内容是否新增原简历不存在的公司、学校、技能或项目事实。
+- 阶段 5N：模板 DOCX 注入与一页 PDF 导出。
+  - 新增 `DocxProjectTemplateService`，定位项目段落并只替换项目文字，保留图片、页边距、样式和非项目文字。
+  - `TailoredResumePdfService` 改为 DOCX 模板注入后导出 PDF，优先 Windows Word COM，备用 LibreOffice。
+  - 导出后使用 `pypdf` 校验页数；超过 1 页时压缩项目段落，仍超过则返回需人工精简提示。
+  - 前端人审区显示“模板化 PDF：可下载/需重新上传 DOCX/缺少转换器”，并展示项目段落改写。
+- 阶段 5O：CDP 控制网页搜索。
+  - 新增 `POST /api/platform-jobs/search`，接收平台、关键词、城市和 limit。
+  - `browser_cdp` 搜索任务会优先调用 `search_and_extract()`，先控制已登录平台页输入/跳转搜索，再提取岗位。
+  - 搜索控制只限搜索和读取，不自动投递、不自动发招呼语。
+- 阶段 5P：薪资显示二次修复。
+  - CDP 薪资候选增加相邻节点、父节点和页面脚本薪资片段。
+  - 前端候选预览和岗位池无可信薪资时统一显示“薪资读取失败”。
+- 阶段 5Q：诊断区精简与岗位详情弹窗。
+  - CDP 提取诊断默认只展示标签页、WebSocket、候选卡片、成功提取四项。
+  - 文本质量和 selector 命中信息折叠到“查看诊断详情”。
+  - 岗位行新增“查看要求”按钮，右侧弹窗展示完整 JD、薪资、链接、匹配原因和风险/缺口。
+- 阶段 5R：全简历可改写协议。
+  - `TailoredResume` 新增 `resume_rewrite`，旧 `project_rewrite` 继续兼容。
+  - LLM prompt 改为锁定身份信息和教育经历，允许基于原简历事实改写技能、项目、实习、经历描述、自我评价和摘要。
+  - `ReviewAgent` 会检查 `resume_rewrite`，防止模型新增原简历不存在的技能、公司、学校或项目事实。
+- 阶段 5S：模板 DOCX 替换范围升级。
+  - 模板服务改为保留身份信息和教育经历，只替换教育经历后的可编辑正文。
+  - PDF 生成优先使用 `resume_rewrite`，仍保留 `project_rewrite` 和 `resume_text` 兜底。
+  - 图片 media、页边距和样式继续保留，一页限制仍只压缩可编辑正文。
+- 阶段 5T-hotfix：真实搜索结果质量修复。
+  - BOSS 搜索 URL 增加常用城市 code 映射，上海会使用 `101020100`，避免沿用杭州等当前页面城市。
+  - `POST /api/platform-jobs/search` 会按请求城市过滤明显不匹配的岗位，未知城市/未展示城市保留。
+  - CDP 抽取脚本会用登录态 `fetch` 尝试读取岗位详情页，列表卡片文本只作为兜底。
+  - 污染标题包含 `□/�/私用区字符` 的岗位会直接丢弃，不再进入岗位池或预览列表。
+  - 前端“只读提取岗位”改为“按关键词搜索并提取”，预览和创建搜索任务使用同一搜索控制路径。
+- 阶段 5U：失败任务重试边界。
+  - Orchestrator 任务详情新增 `retry_suggestion`，失败任务会返回人工重试建议、失败原因和安全边界。
+  - 当前只展示“可人工重试/禁止自动重试”，不会自动恢复任务、不会自动投递、不会自动发送招呼语。
+  - 前端 Agent 状态区展开“查看步骤”后会显示重试边界说明和下一步人工操作建议。
+- 阶段 5V：真实平台回归样例与详情页选择器校验。
+  - 新增脱敏回归样例：列表卡片只有残缺文本和失败薪资时，后端优先采用详情页 `detail_description` 和 `detail_salary_candidates`。
+  - CDP 详情页脚本会从更多 BOSS/实习僧详情选择器、包含“职位描述/岗位职责/任职要求”等关键词的节点、详情页薪资节点和正文中收集 JD 与薪资候选。
+  - 薪资提取修复了 `250-350元/天` 被截成 `250-350元` 的优先级问题。
+- 阶段 5W：真实平台空详情/低质量结果的前端提示与人工补全入口。
+  - 新增 `getJobDetailQuality()`，前端会判断岗位 JD 是否为空、是否只像列表卡片摘要。
+  - 岗位详情弹窗在低质量 JD 时显示“详情未补全”的原因和操作提示。
+  - 弹窗内提供“打开原岗位 / 刷新会话 / 重新提取”入口，方便用户在登录平台页面补全后回到工作台重试提取。
+- 阶段 5W-hotfix：BOSS 候选卡片为 0 的搜索页兼容。
+  - BOSS 搜索 URL 改为当前页面形态 `/web/geek/jobs`，避免仍跳到旧 `/web/geek/job` 路径。
+  - CDP 抽取脚本会等待 React 岗位卡片/岗位链接渲染，最多轮询约 3 秒后再扫描。
+  - BOSS 候选选择器增加 `job-card/job-list/search-job/ka=search_list` 等兜底，降低“标签页已检测但候选 0”的概率。
+- 阶段 5X：低质量 JD 后端诊断原因结构化。
+  - `ExtractedJobCandidate` 和 `JobPosting` 新增 `detail_status` / `detail_reason`。
+  - CDP 抽取会返回 `detail_fetched`、`detail_blocked`、`card_only`、`low_quality` 等详情补全状态和中文原因。
+  - SQLite `jobs` 表新库直接创建详情状态列，老库启动时自动补列；真实岗位导入后仍保留详情诊断原因。
+  - 前端详情质量判断优先使用后端结构化原因，只有旧数据缺字段时才回退到文本长度判断。
+- 阶段 5Y：真实平台岗位详情刷新单岗位入口。
+  - 新增 `POST /api/jobs/{job_id}/refresh-detail`，可对单个已入库岗位重新读取平台详情页。
+  - 后端会用当前 CDP 浏览器里已登录的平台标签页读取该岗位 URL，只更新 `salary`、`description`、`detail_status`、`detail_reason`，不重新导入整页岗位。
+  - 前端岗位详情弹窗新增“刷新当前岗位详情”按钮，刷新成功后只替换当前岗位卡片和弹窗内容。
 
 ## 未完成
 
 - “模型自动选择”已有最小策略路由，但尚未实现多模型池、按成本/失败率自动切换、按 Agent 配置不同模型。
 - 多 Agent 当前是模块拆分，不是可并行调度运行时。
-- `JobSearchAgent` 尚未拆成独立任务级 Agent；Orchestrator 已有最小骨架和任务摘要持久化，但尚未实现重试、并行调度或任务恢复执行。
+- `JobSearchAgent` 尚未拆成独立任务级 Agent；Orchestrator 已有最小骨架、任务摘要持久化和失败任务人工重试提示，但尚未实现自动重试、并行调度或任务恢复执行。
 - `EventStreamService` 目前是进程内最小事件缓存，尚未持久化，也不是 SSE/WebSocket 实时推送。
-- 浏览器自动化只做 CDP 只读提取和启动，不做自动点击、自动投递或自动打招呼。
-- 没有真实 BOSS/实习僧页面回归样例快照，DOM 和状态关键词仍需在用户登录后的真实页面上继续校验。
+- 浏览器自动化已支持 CDP 搜索控制和只读提取，但不做自动投递、自动打招呼、验证码处理或账号登录。
+- 已有脱敏真实平台回归样例，但还没有持续维护的 BOSS/实习僧页面快照库；DOM、状态关键词和详情页结构仍需在用户登录后的真实页面上继续校验。
 - 没有完整数据库迁移系统、外键约束、并发保护、审计日志和密钥管理。
+- 模板化 PDF 目前只支持 DOCX 源模板；PDF 简历无法可靠保留图片和排版后只改可编辑正文。
 
 ## 风险
 
-- BOSS/实习僧页面 DOM 和文案随时可能变化，当前同步服务只能提高可诊断性，不能保证长期稳定。
+- BOSS/实习僧页面 DOM、搜索框、城市控件、字体混淆和文案随时可能变化，当前搜索控制和薪资增强只能提高真实数据命中率，不能保证每页都能稳定读到结果和薪资。
+- 详情页读取依赖平台允许同源登录态 `fetch`；如果平台接口风控或详情页结构变化，弹窗仍会回退到列表卡片文本并提示打开原岗位。
 - 用户如果未登录、页面停在验证码/风控页、结果为空页，系统只能返回诊断，不能绕过平台限制。
 - LLM 输出仍需要 `ReviewAgent` 审核，模型可能返回不合规 JSON 或尝试虚构经历，因此保留本地回退。
+- 模板化 PDF 导出依赖本机 Microsoft Word 或 LibreOffice；两者都不可用时接口会返回缺少转换器。
+- 一页 PDF 限制只会压缩可编辑正文，不会修改身份信息、教育经历、图片或整体模板；如果模板本身过长，仍需要人工精简。
 - Git 远程仓库已配置为 `https://github.com/PrinceSquirrel/find-work.git`，`main` 已成功推送并跟踪 `origin/main`；后续 push 仍依赖本机 GitHub 凭据可用。
 - 文档和代码中不得写入真实 API Key、Cookie、密码或平台隐私数据。
 
 ## 下一步任务
 
-建议进入 5D：任务详情接口与前端详情入口。
+建议进入 5Z：单岗位详情刷新可观察性与真实页面回归加固。
 
-目标：为 Orchestrator 增加最小任务详情读取能力，让前端可以从最近任务摘要进入步骤详情，为后续失败重试和恢复执行入口做准备。
+目标：把 5Y 的单岗位详情刷新动作接入 Agent/Orchestrator 事件摘要，并补充真实平台详情刷新脚本的脱敏 HTML 回归样例，继续提升 BOSS/实习僧详情页 JD 与薪资命中率。
 
 预计文件控制在 3-5 个：
 
-- `backend/app/main.py`
+- `backend/app/services/browser_job_extractor_service.py`
 - `backend/app/services/job_application_service.py`
-- `frontend/src/lib/dashboard.ts`
-- `frontend/src/App.tsx`
+- `backend/app/services/orchestrator_service.py`
+- `backend/tests/test_api_flow.py`
 - `docs/CODEX_STATUS.md`
 
-浏览器中应该看到：最近编排任务摘要旁可查看任务步骤详情，但仍不自动重试、不自动恢复执行。
+浏览器中应该看到：点击“刷新当前岗位详情”时，Agent 状态区能显示本次详情刷新步骤；刷新失败时显示可理解的失败原因，不覆盖原有人工判断。
 
 ## 最近修改文件
 
 - `backend/app/services/model_router_service.py`
 - `backend/app/services/event_stream_service.py`
 - `backend/app/services/orchestrator_service.py`
+- `backend/app/services/browser_job_extractor_service.py`
+- `backend/app/services/pdf_service.py`
 - `backend/app/services/job_application_service.py`
+- `backend/app/services/llm_client_service.py`
 - `backend/app/storage.py`
 - `backend/app/main.py`
+- `backend/app/agents/application_writer.py`
+- `backend/app/agents/resume_parser.py`
+- `backend/app/agents/resume_tailor.py`
+- `backend/app/agents/review.py`
+- `backend/app/schemas.py`
+- `backend/requirements.txt`
+- `backend/tests/test_agents.py`
 - `backend/tests/test_api_flow.py`
+- `backend/tests/test_template_resume_pdf_service.py`
 - `frontend/src/lib/api.ts`
+- `frontend/src/lib/api.test.ts`
 - `frontend/src/lib/dashboard.ts`
 - `frontend/src/lib/dashboard.test.ts`
+- `frontend/src/types.ts`
 - `frontend/src/App.tsx`
 - `frontend/src/styles.css`
 - `docs/CODEX_STATUS.md`
 
 ## 最近验证
 
+- 5Y 红灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_single_job_detail_can_be_refreshed_from_browser_cdp -q`：按预期失败，暴露 `POST /api/jobs/{job_id}/refresh-detail` 路由不存在。
+  - `npm test -- --run src/lib/api.test.ts`：按预期失败，暴露前端 API 客户端缺少 `refreshJobDetail()`。
+- 5Y 绿灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_single_job_detail_can_be_refreshed_from_browser_cdp -q`：通过。
+  - `npm test -- --run src/lib/api.test.ts`：通过，4 个前端 API 测试。
+  - `python -m pytest -q`：通过，47 个后端测试；测试辅助 PDF 仍触发 reportlab 的 Python 3.14 deprecation warning。
+  - `npm test -- --run`：通过，14 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+- 5X 红灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_platform_job_extraction_prefers_detail_page_requirements_and_salary backend\tests\test_api_flow.py::test_browser_cdp_search_mode_saves_extracted_jobs_without_demo_fallback -q`：按预期失败，暴露提取候选和导入岗位池后都缺少 `detail_status/detail_reason`。
+- 5X 绿灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_platform_job_extraction_prefers_detail_page_requirements_and_salary backend\tests\test_api_flow.py::test_browser_cdp_search_mode_saves_extracted_jobs_without_demo_fallback -q`：通过。
+  - `npm test -- --run`：通过，13 个前端测试。
+  - `python -m pytest -q`：通过，46 个后端测试；测试辅助 PDF 仍触发 reportlab 的 Python 3.14 deprecation warning。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+  - `git diff --check`：无空白错误，仅 Windows 行尾转换提示。
+- 5W 红灯验证：
+  - `npm test -- --run`：按预期失败，暴露缺少 `getJobDetailQuality()`，岗位详情弹窗无法区分空 JD、列表卡片摘要和完整 JD。
+- 5W 绿灯验证：
+  - `npm test -- --run`：通过，12 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+  - `python -m pytest -q`：通过，45 个后端测试；测试辅助 PDF 仍触发 reportlab 的 Python 3.14 deprecation warning。
+  - `git diff --check`：无空白错误，仅 Windows 行尾转换提示。
+- 5W-hotfix 红灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_boss_browser_script_targets_jobs_page_and_waits_for_rendered_cards -q`：按预期失败，暴露 BOSS 搜索 URL 仍是 `/web/geek/job` 且抽取脚本没有等待岗位卡片渲染。
+- 5W-hotfix 绿灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_boss_browser_script_targets_jobs_page_and_waits_for_rendered_cards -q`：通过。
+  - `python -m pytest backend\tests\test_api_flow.py -k "platform_job_extraction or platform_job_search or boss_browser_script" -q`：通过，8 个 CDP 抽取/搜索相关测试。
+- 5V 红灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_platform_job_extraction_prefers_detail_page_requirements_and_salary -q`：按预期失败，暴露 CDP 详情页脚本缺少 `detail_salary_candidates`，后端也未优先采用 `detail_description`。
+- 5V 绿灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_platform_job_extraction_prefers_detail_page_requirements_and_salary -q`：通过。
+  - `python -m pytest backend\tests\test_api_flow.py -k "platform_job_extraction or platform_job_search" -q`：通过，7 个 CDP 抽取/搜索相关测试。
+  - `python -m pytest -q`：通过，45 个后端测试；测试辅助 PDF 仍触发 reportlab 的 Python 3.14 deprecation warning。
+  - `npm test -- --run`：通过，11 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+  - `git diff --check`：无空白错误，仅 Windows 行尾转换提示。
+- 5U 红灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_failed_orchestrator_task_detail_includes_manual_retry_boundary -q`：按预期失败，暴露任务详情缺少 `retry_suggestion`。
+- 5U 绿灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_failed_orchestrator_task_detail_includes_manual_retry_boundary -q`：通过。
+  - `python -m pytest -q`：通过，44 个后端测试；测试辅助 PDF 仍触发 reportlab 的 Python 3.14 deprecation warning。
+  - `npm test -- --run`：通过，11 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+  - `git diff --check`：无空白错误，仅 Windows 行尾转换提示。
+- 5E-5J 绿灯验证：
+  - `python -m pytest -q`：通过，34 个后端测试；存在 reportlab 自身的 Python 3.14 deprecation warning。
+  - `npm test -- --run`：通过，10 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+  - `git diff --check`：无空白错误，仅 Windows 行尾转换提示。
+- 5K-5N 绿灯验证：
+  - `python -m pytest -q`：通过，39 个后端测试；测试辅助 PDF 仍触发 reportlab 的 Python 3.14 deprecation warning。
+  - `npm test -- --run`：通过，10 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+- 5O-5T 绿灯验证：
+  - `python -m pytest -q`：通过，43 个后端测试；测试辅助 PDF 仍触发 reportlab 的 Python 3.14 deprecation warning。
+  - `npm test -- --run`：通过，11 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+  - `git diff --check`：无空白错误，仅 Windows 行尾转换提示。
+- 5T-hotfix 绿灯验证：
+  - `python -m pytest -q`：通过，43 个后端测试；测试辅助 PDF 仍触发 reportlab 的 Python 3.14 deprecation warning。
+  - `npm test -- --run`：通过，11 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
+  - `git diff --check`：无空白错误，仅 Windows 行尾转换提示。
+- 5D 红灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_orchestrator_task_detail_endpoint_returns_steps -q`：按预期失败，暴露任务详情路由不存在。
+- 5D 绿灯验证：
+  - `python -m pytest backend\tests\test_api_flow.py::test_orchestrator_task_detail_endpoint_returns_steps -q`：通过。
+  - `npm test -- --run`：通过，8 个前端测试。
+  - `npm run lint`：通过。
+  - `npm run build`：通过。
 - 5C 红灯验证：
   - `npm test -- --run`：按预期失败，暴露缺少 `buildOrchestratorSummary()`。
 - 5C 绿灯验证：

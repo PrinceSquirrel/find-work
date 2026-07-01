@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -11,6 +12,7 @@ from app.agents.resume_parser import ResumeParserAgent
 from app.agents.resume_tailor import ResumeTailorAgent
 from app.agents.review import ReviewAgent
 from app.schemas import ApplicationStatus, GreetingMessage, JobPosting, ResumeDraft, TailoredResume
+from app.services.llm_client_service import OpenAICompatibleClient
 
 
 def sample_resume() -> ResumeDraft:
@@ -54,6 +56,7 @@ def test_resume_parser_agent_extracts_plain_text_and_known_skills_locally():
     content = (
         "王五\n"
         "技能: Python, FastAPI, SQL, 数据分析\n"
+        "城市: 上海\n"
         "项目: Agent 求职工作台，负责 API 和看板。"
     ).encode("utf-8")
 
@@ -64,6 +67,8 @@ def test_resume_parser_agent_extracts_plain_text_and_known_skills_locally():
     assert {"Python", "FastAPI", "SQL", "Agent", "API", "数据分析", "看板"}.issubset(
         set(resume.profile["skills"])
     )
+    assert resume.profile["suggested_keywords"] == ["Python 实习", "FastAPI 实习", "SQL 实习", "数据分析 实习"]
+    assert resume.profile["suggested_city"] == "上海"
 
 
 def test_job_match_agent_scores_relevant_jobs_higher_than_irrelevant_jobs():
@@ -98,6 +103,11 @@ def test_resume_tailor_agent_does_not_fabricate_missing_skills():
 
     tailored = agent.tailor(resume, job)
 
+    assert tailored.resume_rewrite
+    assert tailored.project_rewrite
+    assert tailored.project_rewrite == tailored.resume_rewrite
+    assert "教育经历" not in tailored.resume_rewrite
+    assert "上海交通大学" not in tailored.resume_rewrite
     assert "Kubernetes" not in tailored.resume_text
     assert "Prometheus" not in tailored.resume_text
     assert "Kubernetes" in tailored.risk_flags
@@ -145,6 +155,42 @@ def test_application_writer_agent_combines_resume_and_greeting_generation():
     assert bundle.greeting.message
 
 
+def test_application_writer_prefers_resume_rewrite_from_llm_json():
+    writer = ApplicationWriterAgent()
+    resume = sample_resume()
+    job = sample_job(id=16, title="数据分析实习生", description="需要 Python、SQL、数据分析。")
+    content = json.dumps(
+        {
+            "resume_rewrite": "简历改写要求: 突出 Python、SQL 和数据分析经历。",
+            "greeting_message": "您好，我对数据分析实习岗位很感兴趣。",
+            "diff_summary": ["突出数据分析经历"],
+            "resume_risk_flags": [],
+            "greeting_risk_flags": [],
+            "tone": "professional",
+        },
+        ensure_ascii=False,
+    )
+
+    bundle = writer.write_from_llm_json(resume, job, content)
+
+    assert bundle.tailored_resume.resume_rewrite == "简历改写要求: 突出 Python、SQL 和数据分析经历。"
+    assert bundle.tailored_resume.project_rewrite == bundle.tailored_resume.resume_rewrite
+    assert bundle.tailored_resume.resume_text == bundle.tailored_resume.resume_rewrite
+
+
+def test_llm_prompt_locks_identity_and_education_while_rewriting_resume_body():
+    prompt = OpenAICompatibleClient()._prompt(
+        sample_resume(),
+        sample_job(id=17, title="Agent 实习生", description="需要 Python、Agent、数据分析。"),
+    )
+
+    assert "resume_rewrite" in prompt
+    assert "锁定" in prompt
+    assert "身份信息" in prompt
+    assert "教育经历" in prompt
+    assert "技能、项目、实习、经历描述、自我评价、摘要" in prompt
+
+
 def test_review_agent_blocks_tailored_resume_when_missing_requirement_was_added():
     resume = sample_resume()
     job = sample_job(
@@ -156,6 +202,7 @@ def test_review_agent_blocks_tailored_resume_when_missing_requirement_was_added(
         job_id=job.id or 0,
         resume_id=resume.id or 0,
         resume_text=f"{resume.raw_text}\n补充: 熟悉 Kubernetes 集群运维。",
+        resume_rewrite="简历改写要求: 补充 Kubernetes 集群运维。",
         diff_summary=["错误新增未在原简历出现的技能"],
         risk_flags=["Kubernetes"],
         truth_check_passed=True,

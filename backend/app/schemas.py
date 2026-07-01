@@ -29,11 +29,14 @@ class ResumeDraft(BaseModel):
     filename: str
     raw_text: str
     profile: dict[str, Any] = Field(default_factory=dict)
+    file_type: str = "txt"
+    template_available: bool = False
     created_at: datetime = Field(default_factory=now_utc)
 
 
 class JobPosting(BaseModel):
     id: int | None = None
+    search_run_id: int | None = None
     platform: str
     company: str
     title: str
@@ -42,6 +45,8 @@ class JobPosting(BaseModel):
     description: str
     url: str
     job_type: str = "internship"
+    detail_status: str = ""
+    detail_reason: str = ""
     created_at: datetime = Field(default_factory=now_utc)
 
 
@@ -68,6 +73,8 @@ class TailoredResume(BaseModel):
     job_id: int
     resume_id: int
     resume_text: str
+    resume_rewrite: str = ""
+    project_rewrite: str = ""
     diff_summary: list[str] = Field(default_factory=list)
     risk_flags: list[str] = Field(default_factory=list)
     truth_check_passed: bool
@@ -187,6 +194,8 @@ class ExtractedJobCandidate(BaseModel):
     description: str = ""
     url: str = ""
     job_type: str = "unknown"
+    detail_status: str = ""
+    detail_reason: str = ""
 
 
 class BrowserExtractionDiagnostics(BaseModel):
@@ -195,6 +204,7 @@ class BrowserExtractionDiagnostics(BaseModel):
     matched_selector_counts: dict[str, int] = Field(default_factory=dict)
     candidate_card_count: int = 0
     extracted_job_count: int = 0
+    text_quality_warnings: list[str] = Field(default_factory=list)
     failure_reason: str = ""
     suggestion: str = ""
 
@@ -211,6 +221,11 @@ class PlatformJobExtraction(BaseModel):
 class BrowserJobExtractRequest(BaseModel):
     platforms: list[str] = Field(default_factory=lambda: ["boss", "shixiseng"])
     limit: int = Field(default=20, ge=1, le=50)
+
+
+class BrowserJobSearchRequest(BrowserJobExtractRequest):
+    keywords: list[str] = Field(default_factory=list)
+    city: str = ""
 
 
 class BrowserJobExtractResponse(BaseModel):

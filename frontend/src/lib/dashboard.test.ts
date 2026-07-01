@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAgentStatusRows,
   buildAgentStatusRowsFromEvents,
+  getJobDetailQuality,
   buildOrchestratorSummary,
   getAllowedNextStatuses,
   getRatePercent,
@@ -15,6 +16,7 @@ import type { AnalyticsBucket, JobPosting, LLMUsageSummary } from "../types";
 const jobs: JobPosting[] = [
   {
     id: 1,
+    search_run_id: 10,
     platform: "boss",
     company: "星河智能科技",
     title: "React Agent 前端实习生",
@@ -34,6 +36,7 @@ const jobs: JobPosting[] = [
   },
   {
     id: 2,
+    search_run_id: 10,
     platform: "shixiseng",
     company: "启明数据实验室",
     title: "数据分析实习生",
@@ -243,5 +246,36 @@ describe("dashboard helpers", () => {
       errorMessage: "",
       detail: "application.materials / success / 2 steps"
     });
+  });
+
+  it("marks empty or card-only job detail as incomplete with manual recovery guidance", () => {
+    const emptyQuality = getJobDetailQuality({ ...jobs[0], description: "" });
+    const cardOnlyQuality = getJobDetailQuality({
+      ...jobs[0],
+      description: "AI Agent优化工程师实习 - 元/天 4天/周 硕士 上海"
+    });
+    const completeQuality = getJobDetailQuality({
+      ...jobs[0],
+      description: "职位描述：负责 Agent 工具链评测、提示词优化和数据分析。任职要求：熟悉 Python、SQL、React，了解大模型调用和实验记录。"
+    });
+
+    expect(emptyQuality.isComplete).toBe(false);
+    expect(emptyQuality.reason).toContain("没有提取到岗位要求");
+    expect(cardOnlyQuality.isComplete).toBe(false);
+    expect(cardOnlyQuality.reason).toContain("只读取到列表卡片");
+    expect(cardOnlyQuality.actionHint).toContain("刷新会话");
+    expect(completeQuality.isComplete).toBe(true);
+  });
+
+  it("uses backend structured detail reason before frontend text heuristics", () => {
+    const quality = getJobDetailQuality({
+      ...jobs[0],
+      description: "职位描述：负责 Agent 工具链评测、提示词优化。",
+      detail_status: "detail_blocked",
+      detail_reason: "详情页请求失败：HTTP 403。"
+    });
+
+    expect(quality.isComplete).toBe(false);
+    expect(quality.reason).toBe("详情页请求失败：HTTP 403。");
   });
 });

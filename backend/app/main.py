@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.application_tracker import InvalidStatusTransition
@@ -11,6 +11,7 @@ from app.schemas import (
     ApplicationSyncRequest,
     ApplyRecordRequest,
     BrowserJobExtractRequest,
+    BrowserJobSearchRequest,
     ModelConfigUpdate,
     SearchRunRequest,
     StatusPatchRequest,
@@ -19,6 +20,7 @@ from app.schemas import (
 from app.services import JobApplicationService
 from app.services.application_sync_service import ApplicationSyncService
 from app.services.browser_job_extractor_service import BrowserJobExtractorService
+from app.services.pdf_service import TailoredResumePdfService
 from app.services.platform_session_service import CdpBrowserLauncher, PlatformSessionService
 from app.storage import SQLiteStore
 
@@ -65,6 +67,15 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     def extract_platform_jobs(payload: BrowserJobExtractRequest):
         return BrowserJobExtractorService().extract(payload.platforms, payload.limit)
 
+    @app.post("/api/platform-jobs/search")
+    def search_platform_jobs(payload: BrowserJobSearchRequest):
+        return BrowserJobExtractorService().search_and_extract(
+            payload.platforms,
+            payload.keywords,
+            payload.city,
+            payload.limit,
+        )
+
     @app.post("/api/resumes", status_code=201)
     async def upload_resume(file: Annotated[UploadFile, File()]):
         content = await file.read()
@@ -88,8 +99,17 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/jobs")
-    def list_jobs():
-        return app.state.service.list_jobs()
+    def list_jobs(search_run_id: int | None = None):
+        return app.state.service.list_jobs(search_run_id=search_run_id)
+
+    @app.post("/api/jobs/{job_id}/refresh-detail")
+    def refresh_job_detail(job_id: int):
+        try:
+            return app.state.service.refresh_job_detail(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/jobs/{job_id}/tailor", status_code=201)
     def tailor_job(job_id: int, payload: TailorRequest):
@@ -97,6 +117,30 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
             return app.state.service.tailor_for_job(job_id=job_id, resume_id=payload.resume_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/tailored-resumes/{tailored_resume_id}/pdf")
+    def download_tailored_resume_pdf(tailored_resume_id: int):
+        try:
+            tailored_bundle = app.state.service.store.get_tailor_bundle(tailored_resume_id)
+            template_bytes = app.state.service.store.get_resume_template_bytes(int(tailored_bundle["resume_id"]))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
+            pdf_bytes = TailoredResumePdfService().render(tailored_bundle, template_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            status_code = 409 if "超过 1 页" in str(exc) else 503
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="tailored-resume-{tailored_resume_id}.pdf"',
+            },
+        )
 
     @app.post("/api/jobs/{job_id}/apply-record", status_code=201)
     def create_application(job_id: int, payload: ApplyRecordRequest):
@@ -134,6 +178,13 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     @app.get("/api/agent-events")
     def agent_events():
         return app.state.service.agent_events_summary()
+
+    @app.get("/api/orchestrator/tasks/{task_id}")
+    def orchestrator_task(task_id: int):
+        try:
+            return app.state.service.orchestrator.get_task(task_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return app
 

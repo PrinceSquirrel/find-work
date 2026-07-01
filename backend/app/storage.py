@@ -44,6 +44,9 @@ class SQLiteStore:
                     filename TEXT NOT NULL,
                     raw_text TEXT NOT NULL,
                     profile_json TEXT NOT NULL,
+                    file_type TEXT NOT NULL DEFAULT 'txt',
+                    template_available INTEGER NOT NULL DEFAULT 0,
+                    original_file_bytes BLOB,
                     created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS search_runs (
@@ -66,6 +69,8 @@ class SQLiteStore:
                     description TEXT NOT NULL,
                     url TEXT NOT NULL,
                     job_type TEXT NOT NULL,
+                    detail_status TEXT NOT NULL DEFAULT '',
+                    detail_reason TEXT NOT NULL DEFAULT '',
                     match_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
@@ -74,6 +79,8 @@ class SQLiteStore:
                     job_id INTEGER NOT NULL,
                     resume_id INTEGER NOT NULL,
                     resume_text TEXT NOT NULL,
+                    resume_rewrite TEXT NOT NULL DEFAULT '',
+                    project_rewrite TEXT NOT NULL DEFAULT '',
                     diff_summary_json TEXT NOT NULL,
                     risk_flags_json TEXT NOT NULL,
                     truth_check_passed INTEGER NOT NULL,
@@ -155,6 +162,9 @@ class SQLiteStore:
                 """
             )
             self._ensure_llm_usage_columns(conn)
+            self._ensure_resume_template_columns(conn)
+            self._ensure_tailored_resume_columns(conn)
+            self._ensure_job_detail_columns(conn)
 
     def _ensure_llm_usage_columns(self, conn: sqlite3.Connection) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_usage)").fetchall()}
@@ -162,6 +172,29 @@ class SQLiteStore:
             conn.execute("ALTER TABLE llm_usage ADD COLUMN status TEXT NOT NULL DEFAULT 'success'")
         if "error" not in columns:
             conn.execute("ALTER TABLE llm_usage ADD COLUMN error TEXT NOT NULL DEFAULT ''")
+
+    def _ensure_resume_template_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(resumes)").fetchall()}
+        if "file_type" not in columns:
+            conn.execute("ALTER TABLE resumes ADD COLUMN file_type TEXT NOT NULL DEFAULT 'txt'")
+        if "template_available" not in columns:
+            conn.execute("ALTER TABLE resumes ADD COLUMN template_available INTEGER NOT NULL DEFAULT 0")
+        if "original_file_bytes" not in columns:
+            conn.execute("ALTER TABLE resumes ADD COLUMN original_file_bytes BLOB")
+
+    def _ensure_tailored_resume_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(tailored_resumes)").fetchall()}
+        if "project_rewrite" not in columns:
+            conn.execute("ALTER TABLE tailored_resumes ADD COLUMN project_rewrite TEXT NOT NULL DEFAULT ''")
+        if "resume_rewrite" not in columns:
+            conn.execute("ALTER TABLE tailored_resumes ADD COLUMN resume_rewrite TEXT NOT NULL DEFAULT ''")
+
+    def _ensure_job_detail_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "detail_status" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN detail_status TEXT NOT NULL DEFAULT ''")
+        if "detail_reason" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN detail_reason TEXT NOT NULL DEFAULT ''")
 
     def get_model_config(self) -> ModelConfig:
         with self._connect() as conn:
@@ -212,14 +245,23 @@ class SQLiteStore:
             )
         return config
 
-    def create_resume(self, resume: ResumeDraft) -> ResumeDraft:
+    def create_resume(self, resume: ResumeDraft, original_file_bytes: bytes | None = None) -> ResumeDraft:
         with self._connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO resumes (filename, raw_text, profile_json, created_at) VALUES (?, ?, ?, ?)",
+                """
+                INSERT INTO resumes (
+                    filename, raw_text, profile_json, file_type,
+                    template_available, original_file_bytes, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
                 (
                     resume.filename,
                     resume.raw_text,
                     json.dumps(resume.profile, ensure_ascii=False),
+                    resume.file_type,
+                    1 if resume.template_available else 0,
+                    original_file_bytes if resume.template_available else None,
                     resume.created_at.isoformat(),
                 ),
             )
@@ -235,8 +277,22 @@ class SQLiteStore:
             filename=row["filename"],
             raw_text=row["raw_text"],
             profile=json.loads(row["profile_json"]),
+            file_type=row["file_type"],
+            template_available=bool(row["template_available"]),
             created_at=datetime.fromisoformat(row["created_at"]),
         )
+
+    def get_resume_template_bytes(self, resume_id: int) -> bytes:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT template_available, original_file_bytes FROM resumes WHERE id = ?",
+                (resume_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Resume {resume_id} not found")
+        if not row["template_available"] or row["original_file_bytes"] is None:
+            raise ValueError("请重新上传 DOCX 简历以保留模板")
+        return bytes(row["original_file_bytes"])
 
     def create_search_run(self, run: SearchRun) -> SearchRun:
         with self._connect() as conn:
@@ -266,9 +322,9 @@ class SQLiteStore:
                 """
                 INSERT INTO jobs (
                     search_run_id, platform, company, title, city, salary, description,
-                    url, job_type, match_json, created_at
+                    url, job_type, detail_status, detail_reason, match_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     search_run_id,
@@ -280,6 +336,8 @@ class SQLiteStore:
                     job.description,
                     job.url,
                     job.job_type,
+                    job.detail_status,
+                    job.detail_reason,
                     json.dumps(match.model_dump(mode="json"), ensure_ascii=False),
                     job.created_at.isoformat(),
                 ),
@@ -290,11 +348,17 @@ class SQLiteStore:
                 "UPDATE jobs SET match_json = ? WHERE id = ?",
                 (json.dumps(stored_match.model_dump(mode="json"), ensure_ascii=False), job_id),
             )
-            return job.model_copy(update={"id": job_id})
+            return job.model_copy(update={"id": job_id, "search_run_id": search_run_id})
 
-    def list_jobs(self) -> list[dict[str, Any]]:
+    def list_jobs(self, search_run_id: int | None = None) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM jobs ORDER BY id DESC").fetchall()
+            if search_run_id is None:
+                rows = conn.execute("SELECT * FROM jobs ORDER BY id DESC").fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM jobs WHERE search_run_id = ? ORDER BY id DESC",
+                    (search_run_id,),
+                ).fetchall()
         return [self._job_row_to_dict(row) for row in rows]
 
     def get_job(self, job_id: int) -> JobPosting:
@@ -304,6 +368,7 @@ class SQLiteStore:
             raise KeyError(f"Job {job_id} not found")
         return JobPosting(
             id=row["id"],
+            search_run_id=row["search_run_id"],
             platform=row["platform"],
             company=row["company"],
             title=row["title"],
@@ -312,8 +377,31 @@ class SQLiteStore:
             description=row["description"],
             url=row["url"],
             job_type=row["job_type"],
+            detail_status=row["detail_status"],
+            detail_reason=row["detail_reason"],
             created_at=datetime.fromisoformat(row["created_at"]),
         )
+
+    def update_job_detail(
+        self,
+        job_id: int,
+        *,
+        salary: str,
+        description: str,
+        detail_status: str,
+        detail_reason: str,
+    ) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE jobs
+                SET salary = ?, description = ?, detail_status = ?, detail_reason = ?
+                WHERE id = ?
+                """,
+                (salary, description, detail_status, detail_reason, job_id),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"Job {job_id} not found")
 
     def save_tailor_bundle(
         self,
@@ -325,15 +413,17 @@ class SQLiteStore:
             cursor = conn.execute(
                 """
                 INSERT INTO tailored_resumes (
-                    job_id, resume_id, resume_text, diff_summary_json, risk_flags_json,
-                    truth_check_passed, greeting_json, review_json, created_at
+                    job_id, resume_id, resume_text, resume_rewrite, project_rewrite, diff_summary_json,
+                    risk_flags_json, truth_check_passed, greeting_json, review_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     tailored.job_id,
                     tailored.resume_id,
                     tailored.resume_text,
+                    tailored.resume_rewrite,
+                    tailored.project_rewrite,
                     json.dumps(tailored.diff_summary, ensure_ascii=False),
                     json.dumps(tailored.risk_flags, ensure_ascii=False),
                     1 if tailored.truth_check_passed else 0,
@@ -347,6 +437,29 @@ class SQLiteStore:
             **tailored.model_dump(mode="json"),
             "greeting": greeting.model_dump(mode="json"),
             "review": review,
+        }
+
+    def get_tailor_bundle(self, tailored_resume_id: int) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tailored_resumes WHERE id = ?",
+                (tailored_resume_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Tailored resume {tailored_resume_id} not found")
+        return {
+            "id": row["id"],
+            "job_id": row["job_id"],
+            "resume_id": row["resume_id"],
+            "resume_text": row["resume_text"],
+            "resume_rewrite": row["resume_rewrite"],
+            "project_rewrite": row["project_rewrite"],
+            "diff_summary": json.loads(row["diff_summary_json"]),
+            "risk_flags": json.loads(row["risk_flags_json"]),
+            "truth_check_passed": bool(row["truth_check_passed"]),
+            "greeting": json.loads(row["greeting_json"]),
+            "review": json.loads(row["review_json"]),
+            "created_at": row["created_at"],
         }
 
     def create_application(self, job: JobPosting, note: str = "") -> ApplicationRecord:
@@ -670,6 +783,7 @@ class SQLiteStore:
     def _job_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "id": row["id"],
+            "search_run_id": row["search_run_id"],
             "platform": row["platform"],
             "company": row["company"],
             "title": row["title"],
@@ -678,6 +792,8 @@ class SQLiteStore:
             "description": row["description"],
             "url": row["url"],
             "job_type": row["job_type"],
+            "detail_status": row["detail_status"],
+            "detail_reason": row["detail_reason"],
             "created_at": row["created_at"],
             "match": json.loads(row["match_json"]),
         }

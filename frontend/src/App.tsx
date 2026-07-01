@@ -8,6 +8,7 @@ import {
   clampPercent,
   formatDateTime,
   getAllowedNextStatuses,
+  getJobDetailQuality,
   getRatePercent,
   getStatusTone,
   rankJobs,
@@ -76,6 +77,7 @@ type BusyState = {
   tailorJobId: number | null;
   applyJobId: number | null;
   updateApplicationId: number | null;
+  refreshDetailJobId: number | null;
 };
 
 const initialBusy: BusyState = {
@@ -88,10 +90,13 @@ const initialBusy: BusyState = {
   syncApplications: false,
   tailorJobId: null,
   applyJobId: null,
-  updateApplicationId: null
+  updateApplicationId: null,
+  refreshDetailJobId: null
 };
 
 type SearchMode = "demo" | "browser_cdp";
+type AgentEventsPayload = Awaited<ReturnType<typeof api.getAgentEvents>>;
+type OrchestratorTaskDetail = NonNullable<NonNullable<AgentEventsPayload["orchestrator"]>["last_task"]>;
 
 function App() {
   const [resume, setResume] = useState<ResumeDraft | null>(null);
@@ -102,13 +107,16 @@ function App() {
   const [agentEvents, setAgentEvents] = useState<Awaited<ReturnType<typeof api.getAgentEvents>> | null>(null);
   const [tailorBundles, setTailorBundles] = useState<Record<number, TailorBundle>>({});
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
+  const [detailJobId, setDetailJobId] = useState<number | null>(null);
   const [lastRun, setLastRun] = useState<SearchRun | null>(null);
-  const [searchMode, setSearchMode] = useState<SearchMode>("demo");
+  const [searchMode, setSearchMode] = useState<SearchMode>("browser_cdp");
   const [platformSessions, setPlatformSessions] = useState<PlatformSession[]>([]);
   const [platformExtractions, setPlatformExtractions] = useState<PlatformJobExtraction[]>([]);
   const [syncProposals, setSyncProposals] = useState<ApplicationSyncProposal[]>([]);
   const [syncDiagnostics, setSyncDiagnostics] = useState<ApplicationSyncDiagnostic[]>([]);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [pdfStatusMessage, setPdfStatusMessage] = useState<string | null>(null);
+  const [orchestratorDetail, setOrchestratorDetail] = useState<OrchestratorTaskDetail | null>(null);
   const [cdpLaunchMessage, setCdpLaunchMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failedAgent, setFailedAgent] = useState<ReturnType<typeof buildAgentStatusRows>[number]["agentName"] | null>(null);
@@ -116,6 +124,7 @@ function App() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [searchKeywords, setSearchKeywords] = useState("React 实习, Agent 实习");
   const [searchCity, setSearchCity] = useState("上海");
+  const [searchFieldsTouched, setSearchFieldsTouched] = useState(false);
   const [platforms, setPlatforms] = useState<Record<"boss" | "shixiseng", boolean>>({
     boss: true,
     shixiseng: true
@@ -143,17 +152,31 @@ function App() {
     [jobs, rankedJobs, selectedJobId]
   );
   const selectedBundle = selectedJob ? tailorBundles[selectedJob.id] : undefined;
+  const detailJob = useMemo(
+    () => jobs.find((job) => job.id === detailJobId) ?? null,
+    [detailJobId, jobs]
+  );
+  const detailQuality = useMemo(() => (detailJob ? getJobDetailQuality(detailJob) : null), [detailJob]);
   const applicationsByJob = useMemo(() => {
     return new Map(applications.map((application) => [application.job_id, application]));
   }, [applications]);
   const usageCards = useMemo(() => summarizeUsage(usage), [usage]);
   const totalApplications = analytics?.totals.applications ?? applications.length;
+  const importableExtractionCount = useMemo(
+    () =>
+      platformExtractions.reduce(
+        (total, extraction) => total + (extraction.status === "success" ? extraction.jobs.length : 0),
+        0
+      ),
+    [platformExtractions]
+  );
   const localRunningAgent = useMemo(() => {
     if (busy.upload) return "ResumeParserAgent";
     if (busy.search) return "JobSearchAgent";
+    if (busy.refreshDetailJobId !== null) return "JobSearchAgent";
     if (busy.tailorJobId !== null) return "ApplicationWriterAgent";
     return null;
-  }, [busy.upload, busy.search, busy.tailorJobId]);
+  }, [busy.refreshDetailJobId, busy.search, busy.tailorJobId, busy.upload]);
   const runningAgent = agentEvents?.current_running_agent ?? localRunningAgent;
   const agentRows = useMemo(
     () =>
@@ -174,6 +197,8 @@ function App() {
   );
   const agentCost = agentEvents ? `$${agentEvents.total_cost_usd.toFixed(4)}` : usageCards.totalCost;
   const orchestratorSummary = useMemo(() => buildOrchestratorSummary(agentEvents), [agentEvents]);
+  const orchestratorTaskId = agentEvents?.orchestrator?.last_task?.id ?? null;
+  const visibleOrchestratorDetail = orchestratorDetail?.id === orchestratorTaskId ? orchestratorDetail : null;
 
   async function refreshWorkspace() {
     setBusy((current) => ({ ...current, boot: true }));
@@ -224,6 +249,25 @@ function App() {
     }
   }
 
+  async function handleToggleOrchestratorDetail(taskId: number) {
+    if (orchestratorDetail?.id === taskId) {
+      setOrchestratorDetail(null);
+      return;
+    }
+    setError(null);
+    try {
+      const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+      const response = await fetch(`${apiBaseUrl}/api/orchestrator/tasks/${taskId}`);
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(payload.detail || `读取任务详情失败 (${response.status})`);
+      }
+      setOrchestratorDetail((await response.json()) as OrchestratorTaskDetail);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    }
+  }
+
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!uploadFile) {
@@ -236,6 +280,16 @@ function App() {
     try {
       const nextResume = await api.uploadResume(uploadFile);
       setResume(nextResume);
+      if (!searchFieldsTouched) {
+        const suggestedKeywords = getProfileStringArray(nextResume.profile, "suggested_keywords");
+        const suggestedCity = getProfileString(nextResume.profile, "suggested_city");
+        if (suggestedKeywords.length) {
+          setSearchKeywords(suggestedKeywords.join(", "));
+        }
+        if (suggestedCity) {
+          setSearchCity(suggestedCity);
+        }
+      }
       await refreshOutcomeData();
     } catch (nextError) {
       setFailedAgent("JobSearchAgent");
@@ -245,8 +299,7 @@ function App() {
     }
   }
 
-  async function handleSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function createSearchRunFromCurrentForm(nextSearchMode: SearchMode) {
     if (!resume?.id) {
       setError("请先上传简历，再创建搜索任务。");
       return;
@@ -269,12 +322,13 @@ function App() {
           .filter(Boolean),
         city: searchCity.trim(),
         platforms: selectedPlatforms,
-        search_mode: searchMode
+        search_mode: nextSearchMode
       });
-      const nextJobs = await api.listJobs();
+      const nextJobs = await api.listJobs(run.id);
       setLastRun(run);
       setJobs(nextJobs);
       setSelectedJobId(nextJobs[0]?.id ?? null);
+      setSearchMode(nextSearchMode);
       await refreshOutcomeData();
     } catch (nextError) {
       setFailedAgent("ApplicationWriterAgent");
@@ -282,6 +336,11 @@ function App() {
     } finally {
       setBusy((current) => ({ ...current, search: false }));
     }
+  }
+
+  async function handleSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await createSearchRunFromCurrentForm(searchMode);
   }
 
   async function handleRefreshSessions() {
@@ -327,13 +386,47 @@ function App() {
     setBusy((current) => ({ ...current, extract: true }));
     setError(null);
     try {
-      const response = await api.extractPlatformJobs({ platforms: selectedPlatforms, limit: 10 });
+      const response = await api.searchPlatformJobs({
+        platforms: selectedPlatforms,
+        keywords: searchKeywords
+          .split(",")
+          .map((keyword) => keyword.trim())
+          .filter(Boolean),
+        city: searchCity.trim(),
+        limit: 10
+      });
       setPlatformExtractions(response.extractions);
+      if (response.extractions.some((extraction) => extraction.status === "success" && extraction.jobs.length > 0)) {
+        setSearchMode("browser_cdp");
+      }
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
       setBusy((current) => ({ ...current, extract: false }));
     }
+  }
+
+  async function handleRefreshJobDetail(job: JobPosting) {
+    setBusy((current) => ({ ...current, refreshDetailJobId: job.id }));
+    setError(null);
+    try {
+      const updatedJob = await api.refreshJobDetail(job.id);
+      setJobs((current) => current.map((item) => (item.id === updatedJob.id ? updatedJob : item)));
+      setDetailJobId(updatedJob.id);
+      await refreshAgentEvents();
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, refreshDetailJobId: null }));
+    }
+  }
+
+  async function handleImportExtractedJobs() {
+    if (importableExtractionCount === 0) {
+      setError("请先按关键词搜索并提取到真实岗位后再导入。");
+      return;
+    }
+    await createSearchRunFromCurrentForm("browser_cdp");
   }
 
   async function handleTailor(job: JobPosting) {
@@ -343,6 +436,7 @@ function App() {
     }
     setBusy((current) => ({ ...current, tailorJobId: job.id }));
     setError(null);
+    setPdfStatusMessage(null);
     try {
       const bundle = await api.tailorJob(job.id, resume.id);
       setTailorBundles((current) => ({ ...current, [job.id]: bundle }));
@@ -352,6 +446,46 @@ function App() {
       setError(toErrorMessage(nextError));
     } finally {
       setBusy((current) => ({ ...current, tailorJobId: null }));
+    }
+  }
+
+  async function handleDownloadTailoredPdf(bundle: TailorBundle) {
+    if (!resume?.template_available) {
+      setPdfStatusMessage("模板化 PDF：需重新上传 DOCX 简历以保留模板。");
+      return;
+    }
+    setPdfStatusMessage("模板化 PDF：正在生成一页 PDF...");
+    try {
+      const response = await fetch(api.tailoredResumePdfUrl(bundle.id));
+      if (!response.ok) {
+        let detail = `PDF 生成失败 (${response.status})`;
+        try {
+          const payload = (await response.json()) as { detail?: string };
+          detail = payload.detail || detail;
+        } catch {
+          detail = response.statusText || detail;
+        }
+        if (response.status === 503) {
+          setPdfStatusMessage(`模板化 PDF：缺少转换器。${detail}`);
+        } else if (detail.includes("重新上传 DOCX")) {
+          setPdfStatusMessage("模板化 PDF：需重新上传 DOCX 简历以保留模板。");
+        } else {
+          setPdfStatusMessage(`模板化 PDF：${detail}`);
+        }
+        return;
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `tailored-resume-${bundle.id}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setPdfStatusMessage("模板化 PDF：已生成并开始下载。");
+    } catch (err) {
+      setPdfStatusMessage(`模板化 PDF：${err instanceof Error ? err.message : "下载失败"}`);
     }
   }
 
@@ -496,7 +630,10 @@ function App() {
                 <span>关键词</span>
                 <input
                   value={searchKeywords}
-                  onChange={(event) => setSearchKeywords(event.target.value)}
+                  onChange={(event) => {
+                    setSearchFieldsTouched(true);
+                    setSearchKeywords(event.target.value);
+                  }}
                   placeholder="React 实习, Agent 实习"
                 />
               </label>
@@ -504,7 +641,10 @@ function App() {
                 <span>城市</span>
                 <input
                   value={searchCity}
-                  onChange={(event) => setSearchCity(event.target.value)}
+                  onChange={(event) => {
+                    setSearchFieldsTouched(true);
+                    setSearchCity(event.target.value);
+                  }}
                   placeholder="上海"
                 />
               </label>
@@ -552,7 +692,7 @@ function App() {
                 {busy.sessions ? "刷新中" : "刷新会话"}
               </button>
               <button type="button" onClick={() => void handleExtractPlatformJobs()} disabled={busy.extract}>
-                {busy.extract ? "提取中" : "只读提取岗位"}
+                {busy.extract ? "搜索提取中" : "按关键词搜索并提取"}
               </button>
             </div>
             {cdpLaunchMessage ? <p className="run-line">{cdpLaunchMessage}</p> : null}
@@ -591,21 +731,44 @@ function App() {
                       {extraction.diagnostics.suggestion ? (
                         <small>{extraction.diagnostics.suggestion}</small>
                       ) : null}
-                      <div className="selector-counts">
-                        {formatSelectorCounts(extraction.diagnostics.matched_selector_counts).map((item) => (
-                          <span key={item}>{item}</span>
-                        ))}
-                      </div>
+                      {extraction.diagnostics.text_quality_warnings.length ||
+                      formatSelectorCounts(extraction.diagnostics.matched_selector_counts).length ? (
+                        <details className="diagnostic-details">
+                          <summary>查看诊断详情</summary>
+                          {extraction.diagnostics.text_quality_warnings.length ? (
+                            <div className="selector-counts">
+                              {extraction.diagnostics.text_quality_warnings.map((warning) => (
+                                <span key={warning}>文本质量：{warning}</span>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className="selector-counts">
+                            {formatSelectorCounts(extraction.diagnostics.matched_selector_counts).map((item) => (
+                              <span key={item}>{item}</span>
+                            ))}
+                          </div>
+                        </details>
+                      ) : null}
                     </div>
                     {extraction.jobs.slice(0, 4).map((job) => (
                       <a className="candidate-row" href={job.url || extraction.source_url || "#"} target="_blank" rel="noreferrer" key={`${job.platform}-${job.title}-${job.company}`}>
                         <b>{job.title}</b>
-                        <span>{job.company || "未知公司"} · {job.city || "未知城市"} · {job.salary || "薪资未展示"}</span>
+                        <span>{job.company || "未知公司"} · {job.city || "未知城市"} · {job.salary || "薪资读取失败"}</span>
                       </a>
                     ))}
                   </div>
                 ))}
               </div>
+            ) : null}
+            {importableExtractionCount > 0 ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={busy.search || !resume}
+                onClick={() => void handleImportExtractedJobs()}
+              >
+                {busy.search ? "导入中..." : `导入这批真实岗位到岗位池（${importableExtractionCount}）`}
+              </button>
             ) : null}
             <div className="run-line">
               {lastRun ? (
@@ -675,6 +838,11 @@ function App() {
           <div className="agent-monitor-head">
             <span>当前运行：{runningAgent ?? "无"}</span>
             <b>当前任务总成本 {agentCost}</b>
+            {orchestratorTaskId ? (
+              <button type="button" onClick={() => void handleToggleOrchestratorDetail(orchestratorTaskId)}>
+                {visibleOrchestratorDetail ? "收起步骤" : "查看步骤"}
+              </button>
+            ) : null}
           </div>
           {orchestratorSummary ? (
             <div className={`orchestrator-summary status-${orchestratorSummary.status}`}>
@@ -695,6 +863,28 @@ function App() {
                 <b>{orchestratorSummary.lastStep}</b>
               </div>
               {orchestratorSummary.errorMessage ? <em>错误：{orchestratorSummary.errorMessage}</em> : null}
+            </div>
+          ) : null}
+          {visibleOrchestratorDetail ? (
+            <div className="event-stack" aria-label="编排任务步骤详情">
+              {visibleOrchestratorDetail.retry_suggestion ? (
+                <span>
+                  重试边界：
+                  {visibleOrchestratorDetail.retry_suggestion.mode === "manual_only"
+                    ? "可人工重试，禁止自动重试"
+                    : "当前无需重试"}
+                  {" · "}
+                  {visibleOrchestratorDetail.retry_suggestion.next_action}
+                  {" · "}
+                  {visibleOrchestratorDetail.retry_suggestion.safety_boundary}
+                </span>
+              ) : null}
+              {visibleOrchestratorDetail.steps.map((step) => (
+                <span key={`${step.event_id}-${step.agent_name}-${step.status}`}>
+                  {step.agent_name} · {step.status} · {step.step}
+                  {step.error ? ` · 错误：${step.error}` : ""}
+                </span>
+              ))}
             </div>
           ) : null}
           <div className="agent-status-grid">
@@ -797,6 +987,9 @@ function App() {
                       ))}
                     </div>
                     <div className="row-actions">
+                      <button type="button" onClick={(event) => { event.stopPropagation(); setDetailJobId(job.id); }}>
+                        查看要求
+                      </button>
                       <button type="button" onClick={(event) => { event.stopPropagation(); void handleTailor(job); }}>
                         {busy.tailorJobId === job.id ? "生成中" : tailorBundles[job.id] ? "重新生成" : "生成材料"}
                       </button>
@@ -834,9 +1027,20 @@ function App() {
                   <div className={`truth-badge ${selectedBundle.truth_check_passed ? "pass" : "risk"}`}>
                     {selectedBundle.truth_check_passed ? "事实校验通过" : "需要复核事实风险"}
                   </div>
+                  <div className="pdf-download-row">
+                    <button type="button" onClick={() => void handleDownloadTailoredPdf(selectedBundle)}>
+                      下载模板化一页 PDF
+                    </button>
+                    <span>
+                      {pdfStatusMessage ||
+                        (resume?.template_available
+                          ? "模板化 PDF：可下载"
+                          : "模板化 PDF：需重新上传 DOCX 简历")}
+                    </span>
+                  </div>
                   <section>
-                    <h3>定制简历摘要</h3>
-                    <pre>{selectedBundle.resume_text}</pre>
+                    <h3>简历改写要求</h3>
+                    <pre>{selectedBundle.resume_rewrite || selectedBundle.project_rewrite || selectedBundle.resume_text}</pre>
                   </section>
                   <section>
                     <h3>招呼语</h3>
@@ -1050,6 +1254,71 @@ function App() {
           <RateChart title="按平台" buckets={analytics?.platform ?? {}} labelMap={PLATFORM_LABELS} />
         </Panel>
       </section>
+      {detailJob ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setDetailJobId(null)}>
+          <aside
+            className="job-detail-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="岗位要求详情"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-heading">
+              <div>
+                <span>{PLATFORM_LABELS[detailJob.platform] ?? detailJob.platform}</span>
+                <h2>{detailJob.title}</h2>
+                <p>{detailJob.company || "未知公司"} · {detailJob.city || "未知城市"} · {detailJob.salary || "薪资读取失败"}</p>
+              </div>
+              <button type="button" onClick={() => setDetailJobId(null)}>关闭</button>
+            </div>
+            <div className="job-detail-actions">
+              <a href={detailJob.url} target="_blank" rel="noreferrer">打开原岗位</a>
+              <button type="button" onClick={() => void handleRefreshSessions()} disabled={busy.sessions}>
+                {busy.sessions ? "刷新中" : "刷新会话"}
+              </button>
+              <button type="button" onClick={() => void handleExtractPlatformJobs()} disabled={busy.extract}>
+                {busy.extract ? "提取中" : "重新提取"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRefreshJobDetail(detailJob)}
+                disabled={busy.refreshDetailJobId === detailJob.id}
+              >
+                {busy.refreshDetailJobId === detailJob.id ? "刷新详情中" : "刷新当前岗位详情"}
+              </button>
+            </div>
+            <section>
+              <h3>岗位要求 / JD</h3>
+              {detailQuality && !detailQuality.isComplete ? (
+                <div className="detail-recovery">
+                  <b>详情未补全</b>
+                  <p>{detailQuality.reason}</p>
+                  <small>{detailQuality.actionHint}</small>
+                </div>
+              ) : null}
+              <pre>{detailQuality?.displayDescription ?? "当前页面没有提取到完整岗位要求。"}</pre>
+            </section>
+            <section className="split-list">
+              <div>
+                <h3>匹配原因</h3>
+                {detailJob.match.hit_reasons.length ? (
+                  detailJob.match.hit_reasons.map((reason) => <span className="chip positive" key={reason}>{reason}</span>)
+                ) : (
+                  <small>暂无命中原因</small>
+                )}
+              </div>
+              <div>
+                <h3>风险 / 缺口</h3>
+                {detailJob.match.gap_reasons.length ? (
+                  detailJob.match.gap_reasons.map((reason) => <span className="chip warning" key={reason}>{reason}</span>)
+                ) : (
+                  <small>暂无明显缺口</small>
+                )}
+              </div>
+            </section>
+          </aside>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -1202,6 +1471,19 @@ function formatKeywordCounts(counts: Record<string, number>): string[] {
     .sort(([, left], [, right]) => right - left)
     .map(([keyword, count]) => `${keyword}: ${count}`);
   return rows.length ? rows : ["未命中状态关键词"];
+}
+
+function getProfileStringArray(profile: Record<string, unknown>, key: string): string[] {
+  const value = profile[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
+function getProfileString(profile: Record<string, unknown>, key: string): string {
+  const value = profile[key];
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function toErrorMessage(error: unknown): string {

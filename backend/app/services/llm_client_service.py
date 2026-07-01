@@ -103,9 +103,12 @@ class OpenAICompatibleClient:
 
     def _prompt(self, resume: ResumeDraft, job: JobPosting) -> str:
         return (
-            "请输出 JSON，字段必须包含：resume_text、greeting_message、diff_summary、"
+            "请输出 JSON，字段必须包含：resume_rewrite、greeting_message、diff_summary、"
             "resume_risk_flags、greeting_risk_flags、tone。\n"
-            "要求：只基于原简历改写；如果岗位要求原简历没有出现的技能，只能放入风险提示，不要写入简历正文。\n\n"
+            "要求：锁定身份信息和教育经历，不要改姓名、电话、邮箱、头像、年龄、性别、学校、学历或教育时间；"
+            "可以基于原简历事实改写技能、项目、实习、经历描述、自我评价、摘要等简历正文。"
+            "如果岗位要求原简历没有出现的技能、公司、学校、项目事实或证书，只能放入风险提示，不要写入简历正文。"
+            "resume_rewrite 只输出可替换正文，不要输出锁定的身份信息和教育经历。\n\n"
             f"原简历：\n{resume.raw_text}\n\n"
             f"岗位：{job.company} / {job.title} / {job.city} / {job.salary}\n"
             f"JD：\n{job.description}"

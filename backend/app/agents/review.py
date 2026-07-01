@@ -11,9 +11,8 @@ class ReviewAgent:
         tailored: TailoredResume,
         greeting: GreetingMessage,
     ) -> dict[str, object]:
-        forbidden_additions = [
-            term for term in tailored.risk_flags if term.lower() in tailored.resume_text.lower()
-        ]
+        generated_text = f"{tailored.resume_text}\n{tailored.resume_rewrite}\n{tailored.project_rewrite}".lower()
+        forbidden_additions = [term for term in tailored.risk_flags if term.lower() in generated_text]
         return {
             "job_id": job.id,
             "truth_check_passed": not forbidden_additions and tailored.truth_check_passed,

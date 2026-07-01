@@ -6,6 +6,7 @@ import type {
   ApplicationStatus,
   BrowserJobExtractRequest,
   BrowserJobExtractResponse,
+  BrowserJobSearchRequest,
   JobPosting,
   LLMUsageSummary,
   PlatformSessionsResponse,
@@ -79,8 +80,22 @@ export const api = {
     });
   },
 
-  listJobs(): Promise<JobPosting[]> {
-    return request<JobPosting[]>("/api/jobs");
+  searchPlatformJobs(payload: BrowserJobSearchRequest): Promise<BrowserJobExtractResponse> {
+    return request<BrowserJobExtractResponse>("/api/platform-jobs/search", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  listJobs(searchRunId?: number): Promise<JobPosting[]> {
+    const query = searchRunId ? `?search_run_id=${encodeURIComponent(searchRunId)}` : "";
+    return request<JobPosting[]>(`/api/jobs${query}`);
+  },
+
+  refreshJobDetail(jobId: number): Promise<JobPosting> {
+    return request<JobPosting>(`/api/jobs/${encodeURIComponent(jobId)}/refresh-detail`, {
+      method: "POST"
+    });
   },
 
   tailorJob(jobId: number, resumeId: number): Promise<TailorBundle> {
@@ -88,6 +103,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ resume_id: resumeId })
     });
+  },
+
+  tailoredResumePdfUrl(tailoredResumeId: number): string {
+    return `${API_BASE_URL}/api/tailored-resumes/${encodeURIComponent(tailoredResumeId)}/pdf`;
   },
 
   createApplyRecord(jobId: number, note: string): Promise<ApplicationRecord> {

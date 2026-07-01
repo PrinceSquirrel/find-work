@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from io import BytesIO
 
 from fastapi.testclient import TestClient
 
@@ -8,6 +9,17 @@ from app.schemas import ExtractedJobCandidate, PlatformJobExtraction, PlatformSe
 from app.services import browser_job_extractor_service
 from app.services import job_application_service
 from app.services import platform_session_service
+
+
+def _one_page_pdf() -> bytes:
+    from reportlab.pdfgen import canvas
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer)
+    pdf.drawString(72, 720, "template pdf")
+    pdf.showPage()
+    pdf.save()
+    return buffer.getvalue()
 
 
 def _create_demo_application(client: TestClient) -> int:
@@ -111,6 +123,39 @@ def test_full_resume_to_application_flow(tmp_path):
     metrics_response = client.get("/api/metrics/llm-usage")
     assert metrics_response.status_code == 200
     assert metrics_response.json()["total_tokens"] > 0
+
+
+def test_docx_resume_upload_preserves_original_template_bytes(tmp_path):
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("张三")
+    document.add_paragraph("项目经历")
+    document.add_paragraph("求职 Agent 工作台，负责 Python 和 React。")
+    buffer = BytesIO()
+    document.save(buffer)
+    content = buffer.getvalue()
+    db_path = tmp_path / "agent-business.sqlite3"
+    app = create_app(db_path=db_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.docx", content, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["file_type"] == "docx"
+    assert payload["template_available"] is True
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT file_type, template_available, original_file_bytes FROM resumes WHERE id = ?",
+            (payload["id"],),
+        ).fetchone()
+    assert row[0] == "docx"
+    assert row[1] == 1
+    assert row[2] == content
 
 
 def test_status_endpoint_rejects_illegal_application_transition(tmp_path):
@@ -263,6 +308,38 @@ def test_browser_cdp_search_mode_requires_detected_platform_tab(tmp_path, monkey
     assert "browser_cdp search requires detected platform tabs" in agents["JobSearchAgent"]["error"]
 
 
+def test_failed_orchestrator_task_detail_includes_manual_retry_boundary(tmp_path, monkeypatch):
+    monkeypatch.delenv("BROWSER_CDP_URL", raising=False)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "技能: Python, FastAPI".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+    client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python 实习"],
+            "city": "上海",
+            "platforms": ["boss"],
+            "search_mode": "browser_cdp",
+        },
+    )
+    task_id = client.get("/api/agent-events").json()["orchestrator"]["last_task"]["id"]
+
+    response = client.get(f"/api/orchestrator/tasks/{task_id}")
+
+    assert response.status_code == 200
+    retry_suggestion = response.json()["retry_suggestion"]
+    assert retry_suggestion["mode"] == "manual_only"
+    assert retry_suggestion["retryable"] is True
+    assert "CDP" in retry_suggestion["next_action"]
+    assert "不会自动投递" in retry_suggestion["safety_boundary"]
+
+
 def test_browser_cdp_search_mode_saves_extracted_jobs_without_demo_fallback(tmp_path, monkeypatch):
     class FakePlatformSessionService:
         def inspect(self):
@@ -303,6 +380,8 @@ def test_browser_cdp_search_mode_saves_extracted_jobs_without_demo_fallback(tmp_
                                     description="真实页面可见岗位内容，需要 Python、FastAPI、SQL。",
                                     url="https://www.zhipin.com/job_detail/abc.html",
                                     job_type="boss_browser",
+                                    detail_status="detail_fetched",
+                                    detail_reason="详情页已补全岗位要求。",
                                 )
                             ],
                         )
@@ -339,8 +418,288 @@ def test_browser_cdp_search_mode_saves_extracted_jobs_without_demo_fallback(tmp_
     assert jobs[0]["platform"] == "boss"
     assert jobs[0]["company"] == "真实公司"
     assert jobs[0]["url"] == "https://www.zhipin.com/job_detail/abc.html"
+    assert jobs[0]["detail_status"] == "detail_fetched"
+    assert jobs[0]["detail_reason"] == "详情页已补全岗位要求。"
     assert "match" in jobs[0]
     assert "example.test" not in str(jobs)
+
+
+def test_browser_cdp_search_mode_controls_page_with_keywords_before_extracting(tmp_path, monkeypatch):
+    class FakePlatformSessionService:
+        def inspect(self):
+            return PlatformSessionsResponse(
+                cdp_url="http://127.0.0.1:9222",
+                browser_connected=True,
+                sessions=[
+                    PlatformSession(
+                        platform="boss",
+                        expected_hosts=["zhipin.com"],
+                        state="tab_detected",
+                        detected_url="https://www.zhipin.com/web/geek/job",
+                        message="已检测到平台标签页",
+                    )
+                ],
+            )
+
+    class FakeBrowserJobExtractorService:
+        calls = []
+
+        def search_and_extract(self, platforms, keywords, city, limit):
+            self.__class__.calls.append(
+                {
+                    "platforms": platforms,
+                    "keywords": keywords,
+                    "city": city,
+                    "limit": limit,
+                }
+            )
+            return type(
+                "ExtractionResponse",
+                (),
+                {
+                    "extractions": [
+                        PlatformJobExtraction(
+                            platform="boss",
+                            status="success",
+                            source_url="https://www.zhipin.com/web/geek/job?query=Python",
+                            jobs=[
+                                ExtractedJobCandidate(
+                                    platform="boss",
+                                    company="搜索后公司",
+                                    title="搜索后 Python 岗位",
+                                    city="上海",
+                                    salary="18-25K",
+                                    description="搜索后真实岗位，需要 Python 和数据分析。",
+                                    url="https://www.zhipin.com/job_detail/search.html",
+                                    job_type="boss_browser",
+                                )
+                            ],
+                        )
+                    ]
+                },
+            )()
+
+    monkeypatch.setattr(job_application_service, "PlatformSessionService", FakePlatformSessionService)
+    monkeypatch.setattr(job_application_service, "BrowserJobExtractorService", FakeBrowserJobExtractorService)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "技能: Python, 数据分析".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+
+    response = client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python 实习", "数据分析"],
+            "city": "上海",
+            "platforms": ["boss"],
+            "search_mode": "browser_cdp",
+        },
+    )
+
+    assert response.status_code == 201
+    assert FakeBrowserJobExtractorService.calls == [
+        {
+            "platforms": ["boss"],
+            "keywords": ["Python 实习", "数据分析"],
+            "city": "上海",
+            "limit": 20,
+        }
+    ]
+    jobs = client.get(f"/api/jobs?search_run_id={response.json()['id']}").json()
+    assert jobs[0]["company"] == "搜索后公司"
+    assert jobs[0]["salary"] == "18-25K"
+
+
+def test_single_job_detail_can_be_refreshed_from_browser_cdp(tmp_path, monkeypatch):
+    class FakePlatformSessionService:
+        def inspect(self):
+            return PlatformSessionsResponse(
+                cdp_url="http://127.0.0.1:9222",
+                browser_connected=True,
+                sessions=[
+                    PlatformSession(
+                        platform="boss",
+                        expected_hosts=["zhipin.com"],
+                        state="tab_detected",
+                        detected_url="https://www.zhipin.com/web/geek/jobs",
+                        message="tab detected",
+                    )
+                ],
+            )
+
+    class FakeBrowserJobExtractorService:
+        refreshed = []
+
+        def search_and_extract(self, platforms, keywords, city, limit):
+            return type(
+                "ExtractionResponse",
+                (),
+                {
+                    "extractions": [
+                        PlatformJobExtraction(
+                            platform="boss",
+                            status="success",
+                            source_url="https://www.zhipin.com/web/geek/jobs",
+                            jobs=[
+                                ExtractedJobCandidate(
+                                    platform="boss",
+                                    company="Real Company",
+                                    title="AI Agent Intern",
+                                    city="Shanghai",
+                                    salary="薪资读取失败",
+                                    description="card only",
+                                    url="https://www.zhipin.com/job_detail/refresh.html",
+                                    job_type="boss_browser",
+                                    detail_status="card_only",
+                                    detail_reason="Only card text was available.",
+                                )
+                            ],
+                        )
+                    ]
+                },
+            )()
+
+        def refresh_job_detail(self, platform, url):
+            self.__class__.refreshed.append({"platform": platform, "url": url})
+            return ExtractedJobCandidate(
+                platform=platform,
+                company="Real Company",
+                title="AI Agent Intern",
+                city="Shanghai",
+                salary="260-350/天",
+                description="完整岗位要求：负责 Agent 工作台、FastAPI、React 和数据分析。",
+                url=url,
+                job_type="boss_browser",
+                detail_status="detail_fetched",
+                detail_reason="Detail page refreshed for this job.",
+            )
+
+    monkeypatch.setattr(job_application_service, "PlatformSessionService", FakePlatformSessionService)
+    monkeypatch.setattr(job_application_service, "BrowserJobExtractorService", FakeBrowserJobExtractorService)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "Skills: Python, FastAPI, React".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+    run_response = client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Agent Intern"],
+            "city": "Shanghai",
+            "platforms": ["boss"],
+            "search_mode": "browser_cdp",
+        },
+    )
+    job_id = client.get(f"/api/jobs?search_run_id={run_response.json()['id']}").json()[0]["id"]
+
+    response = client.post(f"/api/jobs/{job_id}/refresh-detail")
+
+    assert response.status_code == 200
+    refreshed = response.json()
+    assert refreshed["id"] == job_id
+    assert refreshed["salary"] == "260-350/天"
+    assert "完整岗位要求" in refreshed["description"]
+    assert refreshed["detail_status"] == "detail_fetched"
+    assert refreshed["detail_reason"] == "Detail page refreshed for this job."
+    assert FakeBrowserJobExtractorService.refreshed == [
+        {"platform": "boss", "url": "https://www.zhipin.com/job_detail/refresh.html"}
+    ]
+    persisted = client.get(f"/api/jobs?search_run_id={run_response.json()['id']}").json()[0]
+    assert persisted["salary"] == "260-350/天"
+    assert persisted["detail_status"] == "detail_fetched"
+
+
+def test_jobs_can_be_filtered_to_the_current_search_run(tmp_path, monkeypatch):
+    class FakePlatformSessionService:
+        def inspect(self):
+            return PlatformSessionsResponse(
+                cdp_url="http://127.0.0.1:9222",
+                browser_connected=True,
+                sessions=[
+                    PlatformSession(
+                        platform="boss",
+                        expected_hosts=["zhipin.com"],
+                        state="tab_detected",
+                        detected_url="https://www.zhipin.com/web/geek/job",
+                        message="已检测到平台标签页",
+                    )
+                ],
+            )
+
+    class FakeBrowserJobExtractorService:
+        def extract(self, platforms, limit):
+            return type(
+                "ExtractionResponse",
+                (),
+                {
+                    "extractions": [
+                        PlatformJobExtraction(
+                            platform="boss",
+                            status="success",
+                            source_url="https://www.zhipin.com/web/geek/job",
+                            jobs=[
+                                ExtractedJobCandidate(
+                                    platform="boss",
+                                    company="真实公司",
+                                    title="真实 Python 岗位",
+                                    city="上海",
+                                    salary="200-300/天",
+                                    description="真实页面岗位，需要 Python。",
+                                    url="https://www.zhipin.com/job_detail/real.html",
+                                    job_type="boss_browser",
+                                )
+                            ],
+                        )
+                    ]
+                },
+            )()
+
+    monkeypatch.setattr(job_application_service, "PlatformSessionService", FakePlatformSessionService)
+    monkeypatch.setattr(job_application_service, "BrowserJobExtractorService", FakeBrowserJobExtractorService)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "技能: Python, FastAPI".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+    demo_run = client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Demo 实习"],
+            "city": "上海",
+            "platforms": ["boss"],
+            "search_mode": "demo",
+        },
+    ).json()
+    browser_run = client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python 实习"],
+            "city": "上海",
+            "platforms": ["boss"],
+            "search_mode": "browser_cdp",
+        },
+    ).json()
+
+    all_jobs = client.get("/api/jobs").json()
+    filtered_jobs = client.get(f"/api/jobs?search_run_id={browser_run['id']}").json()
+
+    assert {job["search_run_id"] for job in all_jobs} == {demo_run["id"], browser_run["id"]}
+    assert len(filtered_jobs) == 1
+    assert filtered_jobs[0]["search_run_id"] == browser_run["id"]
+    assert filtered_jobs[0]["company"] == "真实公司"
 
 
 def test_browser_cdp_search_mode_reports_extraction_failure_without_demo_jobs(tmp_path, monkeypatch):
@@ -525,6 +884,86 @@ def test_tailor_uses_enabled_openai_compatible_model_and_records_usage(tmp_path,
     assert row == ("openai-compatible", "deepseek-chat", 120, 60, 0, 0.00024)
 
 
+def test_tailored_resume_pdf_can_be_downloaded_after_material_generation(tmp_path, monkeypatch):
+    class FakeTailoredResumePdfService:
+        def render(self, tailored_bundle, template_bytes):
+            assert template_bytes.startswith(b"PK")
+            assert tailored_bundle["project_rewrite"]
+            return _one_page_pdf()
+
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module, "TailoredResumePdfService", FakeTailoredResumePdfService)
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("胡俊")
+    document.add_paragraph("项目经历")
+    document.add_paragraph("旧项目描述")
+    buffer = BytesIO()
+    document.save(buffer)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+    upload_response = client.post(
+        "/api/resumes",
+        files={
+            "file": (
+                "resume.docx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    resume_id = upload_response.json()["id"]
+    client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python 实习"],
+            "city": "上海",
+            "platforms": ["boss"],
+        },
+    )
+    job_id = client.get("/api/jobs").json()[0]["id"]
+    tailor_response = client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+    tailored_id = tailor_response.json()["id"]
+
+    pdf_response = client.get(f"/api/tailored-resumes/{tailored_id}/pdf")
+
+    assert pdf_response.status_code == 200
+    assert pdf_response.headers["content-type"] == "application/pdf"
+    assert pdf_response.content.startswith(b"%PDF")
+    assert str(tailored_id) in pdf_response.headers["content-disposition"]
+    assert client.get("/api/tailored-resumes/999999/pdf").status_code == 404
+
+
+def test_tailored_resume_pdf_requires_docx_template(tmp_path):
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "技能: Python, FastAPI, React".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+    client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python 实习"],
+            "city": "上海",
+            "platforms": ["boss"],
+        },
+    )
+    job_id = client.get("/api/jobs").json()[0]["id"]
+    tailor_response = client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+    tailored_id = tailor_response.json()["id"]
+
+    pdf_response = client.get(f"/api/tailored-resumes/{tailored_id}/pdf")
+
+    assert pdf_response.status_code == 409
+    assert "重新上传 DOCX" in pdf_response.json()["detail"]
+
+
 def test_tailor_routes_application_writer_through_model_router(tmp_path, monkeypatch):
     from app.services.model_router_service import ModelRoute
 
@@ -702,6 +1141,47 @@ def test_orchestrator_task_summary_survives_service_restart(tmp_path):
         "ReviewAgent",
         "ReviewAgent",
     ]
+
+
+def test_orchestrator_task_detail_endpoint_returns_steps(tmp_path):
+    db_path = tmp_path / "agent-business.sqlite3"
+    app = create_app(db_path=db_path)
+    client = TestClient(app)
+
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "Skills: Python, FastAPI, React".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+    client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python intern"],
+            "city": "Shanghai",
+            "platforms": ["boss"],
+        },
+    )
+    job_id = client.get("/api/jobs").json()[0]["id"]
+    client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+    task_id = client.get("/api/agent-events").json()["orchestrator"]["last_task"]["id"]
+
+    response = client.get(f"/api/orchestrator/tasks/{task_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == task_id
+    assert payload["task_name"] == "application.materials"
+    assert payload["status"] == "success"
+    assert [step["agent_name"] for step in payload["steps"]] == [
+        "ApplicationWriterAgent",
+        "ApplicationWriterAgent",
+        "ReviewAgent",
+        "ReviewAgent",
+    ]
+
+    missing_response = client.get("/api/orchestrator/tasks/999999")
+    assert missing_response.status_code == 404
 
 
 def test_tailor_falls_back_locally_when_openai_compatible_model_fails(tmp_path, monkeypatch):
@@ -964,6 +1444,285 @@ def test_platform_job_extraction_reads_visible_jobs_from_detected_browser_tab(tm
     assert "hidden" not in str(payload)
 
 
+def test_platform_job_search_controls_page_before_extracting(tmp_path, monkeypatch):
+    class FakeCdpResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps(
+                [
+                    {
+                        "type": "page",
+                        "url": "https://www.zhipin.com/web/geek/job",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1",
+                    }
+                ]
+            ).encode("utf-8")
+
+    expressions = []
+
+    def fake_urlopen(url, timeout=2):
+        return FakeCdpResponse()
+
+    def fake_evaluate(self, websocket_url, expression):
+        expressions.append(expression)
+        if "searchUrl" in expression:
+            return {"clicked": True, "keyword": "Python 实习", "city": "上海"}
+        return {
+            "jobs": [
+                {
+                    "title": "杭州 Python 岗位",
+                    "company": "错误城市公司",
+                    "city": "杭州",
+                    "salary": "18-25K",
+                    "description": "错误城市岗位，不应进入上海搜索结果。",
+                    "url": "https://www.zhipin.com/job_detail/hangzhou.html",
+                    "job_type": "boss_browser",
+                },
+                {
+                    "title": "Python 搜索岗位",
+                    "company": "搜索公司",
+                    "city": "上海",
+                    "salary": "18-25K",
+                    "description": "搜索后的真实岗位，需要 Python。",
+                    "url": "https://www.zhipin.com/job_detail/search.html",
+                    "job_type": "boss_browser",
+                }
+            ],
+            "diagnostics": {"candidate_card_count": 1},
+        }
+
+    monkeypatch.setenv("BROWSER_CDP_URL", "127.0.0.1:9222")
+    monkeypatch.setattr(browser_job_extractor_service, "urlopen", fake_urlopen)
+    monkeypatch.setattr(browser_job_extractor_service, "sleep", lambda seconds: None)
+    monkeypatch.setattr(browser_job_extractor_service.CdpRuntimeClient, "evaluate", fake_evaluate)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/platform-jobs/search",
+        json={"platforms": ["boss"], "keywords": ["Python 实习"], "city": "上海", "limit": 5},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(expressions) == 2
+    assert "Python 实习" in expressions[0]
+    assert "上海" in expressions[0]
+    assert "101020100" in expressions[0]
+    assert "document.querySelectorAll" in expressions[1]
+    assert len(payload["extractions"][0]["jobs"]) == 1
+    assert payload["extractions"][0]["jobs"][0]["title"] == "Python 搜索岗位"
+    assert payload["extractions"][0]["jobs"][0]["salary"] == "18-25K"
+
+
+def test_platform_job_extraction_flags_polluted_text_and_hides_untrusted_fields(tmp_path, monkeypatch):
+    class FakeCdpResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps(
+                [
+                    {
+                        "type": "page",
+                        "url": "https://www.zhipin.com/web/geek/job?query=Python",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1",
+                    }
+                ]
+            ).encode("utf-8")
+
+    def fake_evaluate(self, websocket_url, expression):
+        return {
+            "jobs": [
+                {
+                    "title": "Python 后端实习生",
+                    "company": "真实公司",
+                    "city": "上海",
+                    "salary": "□□K·□□薪",
+                    "description": "真实页面可见岗位内容，需要 Python。",
+                    "url": "https://www.zhipin.com/job_detail/abc.html",
+                    "job_type": "boss_browser",
+                },
+                {
+                    "title": "□□□",
+                    "company": "□□",
+                    "city": "□□",
+                    "salary": "□□",
+                    "description": "□□□",
+                    "url": "https://www.zhipin.com/job_detail/bad.html",
+                    "job_type": "boss_browser",
+                },
+                {
+                    "title": "□□□□开发□□",
+                    "company": "可读公司",
+                    "city": "上海",
+                    "salary": "薪资面议",
+                    "description": "描述可读但标题污染，不应进入岗位池。",
+                    "url": "https://www.zhipin.com/job_detail/partial-bad.html",
+                    "job_type": "boss_browser",
+                },
+            ],
+            "diagnostics": {
+                "matched_selector_counts": {".job-card-wrapper": 2},
+                "candidate_card_count": 2,
+            },
+        }
+
+    monkeypatch.setenv("BROWSER_CDP_URL", "127.0.0.1:9222")
+    monkeypatch.setattr(browser_job_extractor_service, "urlopen", lambda url, timeout: FakeCdpResponse())
+    monkeypatch.setattr(browser_job_extractor_service.CdpRuntimeClient, "evaluate", fake_evaluate)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    response = client.post("/api/platform-jobs/extract", json={"platforms": ["boss"], "limit": 5})
+
+    assert response.status_code == 200
+    extraction = response.json()["extractions"][0]
+    assert extraction["status"] == "success"
+    assert len(extraction["jobs"]) == 1
+    assert extraction["jobs"][0]["title"] == "Python 后端实习生"
+    assert extraction["jobs"][0]["salary"] == "薪资读取失败"
+    assert extraction["diagnostics"]["extracted_job_count"] == 1
+    assert extraction["diagnostics"]["text_quality_warnings"]
+    assert "dropped polluted job" in " ".join(extraction["diagnostics"]["text_quality_warnings"])
+
+
+def test_platform_job_extraction_prefers_valid_salary_candidates_over_polluted_salary(tmp_path, monkeypatch):
+    class FakeCdpResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps(
+                [
+                    {
+                        "type": "page",
+                        "url": "https://www.zhipin.com/web/geek/job?query=Python",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1",
+                    }
+                ]
+            ).encode("utf-8")
+
+    def fake_evaluate(self, websocket_url, expression):
+        assert "salary_candidates" in expression
+        return {
+            "jobs": [
+                {
+                    "title": "算法工程师",
+                    "company": "真实公司",
+                    "city": "杭州",
+                    "salary": "□□K·□□薪",
+                    "salary_candidates": ["□□K·□□薪", "算法工程师 杭州 15-25K·14薪 经验不限"],
+                    "description": "岗位卡片可见内容，需要 Python。",
+                    "url": "https://www.zhipin.com/job_detail/real.html",
+                    "job_type": "boss_browser",
+                },
+                {
+                    "title": "数据分析实习生",
+                    "company": "另一家公司",
+                    "city": "上海",
+                    "salary": "",
+                    "salary_candidates": ["数据分析实习生 上海 经验不限"],
+                    "description": "岗位卡片没有展示薪资。",
+                    "url": "https://www.zhipin.com/job_detail/no-salary.html",
+                    "job_type": "boss_browser",
+                },
+            ],
+            "diagnostics": {
+                "matched_selector_counts": {".job-card-wrapper": 2},
+                "candidate_card_count": 2,
+            },
+        }
+
+    monkeypatch.setenv("BROWSER_CDP_URL", "127.0.0.1:9222")
+    monkeypatch.setattr(browser_job_extractor_service, "urlopen", lambda url, timeout: FakeCdpResponse())
+    monkeypatch.setattr(browser_job_extractor_service.CdpRuntimeClient, "evaluate", fake_evaluate)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    response = client.post("/api/platform-jobs/extract", json={"platforms": ["boss"], "limit": 5})
+
+    assert response.status_code == 200
+    jobs = response.json()["extractions"][0]["jobs"]
+    assert jobs[0]["salary"] == "15-25K·14薪"
+    assert jobs[1]["salary"] == "薪资读取失败"
+    warnings = response.json()["extractions"][0]["diagnostics"]["text_quality_warnings"]
+    assert not any("hid polluted salary" in warning for warning in warnings)
+
+
+def test_platform_job_extraction_prefers_detail_page_requirements_and_salary(tmp_path, monkeypatch):
+    class FakeCdpResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps(
+                [
+                    {
+                        "type": "page",
+                        "url": "https://www.zhipin.com/web/geek/job?query=Agent",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1",
+                    }
+                ]
+            ).encode("utf-8")
+
+    def fake_evaluate(self, websocket_url, expression):
+        assert "detail_salary_candidates" in expression
+        return {
+            "jobs": [
+                {
+                    "title": "AI Agent优化工程师实习",
+                    "company": "真实公司",
+                    "city": "上海",
+                    "salary": "薪资读取失败",
+                    "description": "AI Agent优化工程师实习 - 元/天 4天/周 硕士 上海",
+                    "detail_description": (
+                        "职位描述 岗位职责：负责 Agent 工具链评测、提示词优化和数据分析。"
+                        "任职要求：熟悉 Python、SQL、React，了解大模型调用和实验记录。"
+                    ),
+                    "detail_salary_candidates": ["250-350元/天", "4天/周"],
+                    "url": "https://www.zhipin.com/job_detail/agent.html",
+                    "job_type": "boss_browser",
+                }
+            ],
+            "diagnostics": {
+                "matched_selector_counts": {".job-card-wrapper": 1},
+                "candidate_card_count": 1,
+            },
+        }
+
+    monkeypatch.setenv("BROWSER_CDP_URL", "127.0.0.1:9222")
+    monkeypatch.setattr(browser_job_extractor_service, "urlopen", lambda url, timeout: FakeCdpResponse())
+    monkeypatch.setattr(browser_job_extractor_service.CdpRuntimeClient, "evaluate", fake_evaluate)
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    response = client.post("/api/platform-jobs/extract", json={"platforms": ["boss"], "limit": 5})
+
+    assert response.status_code == 200
+    job = response.json()["extractions"][0]["jobs"][0]
+    assert job["salary"] == "250-350元/天"
+    assert job["detail_status"] == "detail_fetched"
+    assert job["detail_reason"] == "详情页已补全岗位要求。"
+    assert "岗位职责" in job["description"]
+    assert "提示词优化" in job["description"]
+    assert "AI Agent优化工程师实习 - 元/天" not in job["description"]
+
+
 def test_platform_job_extraction_script_contains_resilient_selectors(tmp_path, monkeypatch):
     class FakeCdpResponse:
         def __enter__(self):
@@ -990,6 +1749,10 @@ def test_platform_job_extraction_script_contains_resilient_selectors(tmp_path, m
         assert "[data-job-id]" in expression
         assert "div[class*='job']" in expression
         assert "firstText" in expression
+        assert "scriptSalaryCandidates" in expression
+        assert "nextElementSibling" in expression
+        assert "fetchDetail" in expression
+        assert "await Promise.all" in expression
         return {
             "jobs": [
                 {
@@ -1021,6 +1784,17 @@ def test_platform_job_extraction_script_contains_resilient_selectors(tmp_path, m
     assert extraction["status"] == "success"
     assert extraction["diagnostics"]["matched_selector_counts"]["fallback_links"] == 2
     assert extraction["diagnostics"]["matched_selector_counts"]["[data-jobid]"] == 1
+
+
+def test_boss_browser_script_targets_jobs_page_and_waits_for_rendered_cards():
+    service = browser_job_extractor_service.BrowserJobExtractorService(cdp_url="http://127.0.0.1:9222")
+
+    search_url = service._search_url("boss", "Python 实习", "上海")
+    extract_script = service._extract_script("boss", 10)
+
+    assert "https://www.zhipin.com/web/geek/jobs?" in search_url
+    assert "waitForCandidateCards" in extract_script
+    assert "setTimeout(resolve, 250)" in extract_script
 
 
 def test_platform_job_extraction_reports_diagnostics_when_tab_is_missing(tmp_path, monkeypatch):

@@ -19,6 +19,8 @@ export interface ResumeDraft {
   filename: string;
   raw_text: string;
   profile: Record<string, unknown>;
+  file_type: string;
+  template_available: boolean;
   created_at: string;
 }
 
@@ -32,6 +34,7 @@ export interface JobMatch {
 
 export interface JobPosting {
   id: number;
+  search_run_id: number | null;
   platform: Platform;
   company: string;
   title: string;
@@ -40,6 +43,8 @@ export interface JobPosting {
   description: string;
   url: string;
   job_type: string;
+  detail_status?: string;
+  detail_reason?: string;
   created_at: string;
   match: JobMatch;
 }
@@ -67,6 +72,8 @@ export interface TailoredResume {
   job_id: number;
   resume_id: number;
   resume_text: string;
+  resume_rewrite: string;
+  project_rewrite: string;
   diff_summary: string[];
   risk_flags: string[];
   truth_check_passed: boolean;
@@ -169,6 +176,8 @@ export interface ExtractedJobCandidate {
   description: string;
   url: string;
   job_type: string;
+  detail_status?: string;
+  detail_reason?: string;
 }
 
 export interface BrowserExtractionDiagnostics {
@@ -177,6 +186,7 @@ export interface BrowserExtractionDiagnostics {
   matched_selector_counts: Record<string, number>;
   candidate_card_count: number;
   extracted_job_count: number;
+  text_quality_warnings: string[];
   failure_reason: string;
   suggestion: string;
 }
@@ -193,6 +203,11 @@ export interface PlatformJobExtraction {
 export interface BrowserJobExtractRequest {
   platforms: Platform[];
   limit: number;
+}
+
+export interface BrowserJobSearchRequest extends BrowserJobExtractRequest {
+  keywords: string[];
+  city: string;
 }
 
 export interface BrowserJobExtractResponse {

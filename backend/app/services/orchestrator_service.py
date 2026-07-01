@@ -131,6 +131,12 @@ class OrchestratorService:
             "tasks": [self._task_payload(task) for task in self._tasks],
         }
 
+    def get_task(self, task_id: int) -> dict[str, object]:
+        task = self._find_task(task_id)
+        if task is None:
+            raise KeyError(f"Orchestrator task {task_id} not found")
+        return self._task_payload(task)
+
     def _find_task(self, task_id: int | None) -> OrchestratorTask | None:
         if task_id is None:
             return None
@@ -181,4 +187,52 @@ class OrchestratorService:
         payload = asdict(task)
         payload["started_at"] = task.started_at.isoformat()
         payload["completed_at"] = task.completed_at.isoformat() if task.completed_at else None
+        payload["retry_suggestion"] = self._retry_suggestion(task)
         return payload
+
+    def _retry_suggestion(self, task: OrchestratorTask) -> dict[str, object]:
+        safety_boundary = "系统不会自动投递、不会自动发送招呼语、不会绕过验证码；请人工确认后重新触发原操作。"
+        if task.status == "success":
+            return {
+                "mode": "not_needed",
+                "retryable": False,
+                "automatic_retry_allowed": False,
+                "reason": "任务已成功，无需重试。",
+                "next_action": "无需操作；如需刷新结果，请从对应页面入口重新发起。",
+                "safety_boundary": safety_boundary,
+            }
+        if task.status == "running":
+            return {
+                "mode": "not_available",
+                "retryable": False,
+                "automatic_retry_allowed": False,
+                "reason": "任务仍在运行，暂不提供重试建议。",
+                "next_action": "等待当前任务结束后再查看结果。",
+                "safety_boundary": safety_boundary,
+            }
+
+        reason = task.error or self._last_step_error(task) or "任务失败，未记录更详细错误。"
+        return {
+            "mode": "manual_only",
+            "retryable": True,
+            "automatic_retry_allowed": False,
+            "reason": reason,
+            "next_action": self._manual_retry_action(task),
+            "safety_boundary": safety_boundary,
+        }
+
+    def _manual_retry_action(self, task: OrchestratorTask) -> str:
+        error_text = f"{task.task_name} {task.error} {self._last_step_error(task)}".lower()
+        if task.task_name == "job.search" or "cdp" in error_text or "browser" in error_text:
+            return "确认已启动 CDP 浏览器、已登录 BOSS/实习僧，并检查关键词和城市后，手动重新点击创建搜索任务。"
+        if task.task_name == "application.materials" or "llm" in error_text or "api" in error_text:
+            return "检查模型/API 配置和当前岗位信息后，手动重新点击生成材料。"
+        if task.task_name == "resume.parse":
+            return "检查简历文件格式和内容是否可读后，手动重新上传简历。"
+        return "查看错误信息后，从对应页面入口手动重新触发该操作。"
+
+    def _last_step_error(self, task: OrchestratorTask) -> str:
+        for step in reversed(task.steps):
+            if step.error:
+                return step.error
+        return ""

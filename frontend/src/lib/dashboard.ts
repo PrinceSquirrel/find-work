@@ -64,6 +64,15 @@ export interface BackendOrchestratorStep {
   cost_usd: number;
 }
 
+export interface BackendRetrySuggestion {
+  mode: string;
+  retryable: boolean;
+  automatic_retry_allowed: boolean;
+  reason: string;
+  next_action: string;
+  safety_boundary: string;
+}
+
 export interface BackendOrchestratorTask {
   id: number;
   task_name: string;
@@ -73,6 +82,7 @@ export interface BackendOrchestratorTask {
   started_at: string;
   completed_at: string | null;
   steps: BackendOrchestratorStep[];
+  retry_suggestion?: BackendRetrySuggestion;
 }
 
 export interface BackendOrchestratorSnapshot {
@@ -97,6 +107,13 @@ export interface OrchestratorSummary {
   lastStep: string;
   errorMessage: string;
   detail: string;
+}
+
+export interface JobDetailQuality {
+  isComplete: boolean;
+  reason: string;
+  actionHint: string;
+  displayDescription: string;
 }
 
 const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
@@ -246,6 +263,52 @@ export function buildOrchestratorSummary(snapshot: BackendAgentEventsSnapshot | 
     lastStep: lastStep ? `${lastStep.agent_name} / ${lastStep.step}` : "暂无步骤",
     errorMessage: task.error || errorStep?.error || "",
     detail: `${task.task_name} / ${task.status} / ${stepCount} steps`
+  };
+}
+
+export function getJobDetailQuality(job: Pick<JobPosting, "description" | "detail_status" | "detail_reason">): JobDetailQuality {
+  const description = job.description.trim();
+  const actionHint = "请先打开原岗位核对详情；如果平台页面已经加载完整，回到工作台刷新会话后重新提取。";
+  if (job.detail_status && job.detail_status !== "detail_fetched") {
+    return {
+      isComplete: false,
+      reason: job.detail_reason || "后端标记该岗位详情未补全。",
+      actionHint,
+      displayDescription: description || "当前页面没有提取到完整岗位要求。"
+    };
+  }
+  if (job.detail_status === "detail_fetched") {
+    return {
+      isComplete: true,
+      reason: job.detail_reason || "已提取到较完整岗位要求。",
+      actionHint: "",
+      displayDescription: description
+    };
+  }
+  if (!description) {
+    return {
+      isComplete: false,
+      reason: "当前页面没有提取到岗位要求，可能是详情页被风控、未登录或页面还没加载完成。",
+      actionHint,
+      displayDescription: "当前页面没有提取到完整岗位要求。"
+    };
+  }
+
+  const detailMarkers = /职位描述|岗位职责|任职要求|岗位要求|工作内容|Responsibilities|Requirements|Job Description/i;
+  if (description.length < 80 && !detailMarkers.test(description)) {
+    return {
+      isComplete: false,
+      reason: "当前 JD 过短，可能只读取到列表卡片，详情页没有补全。",
+      actionHint,
+      displayDescription: description
+    };
+  }
+
+  return {
+    isComplete: true,
+    reason: "已提取到较完整岗位要求。",
+    actionHint: "",
+    displayDescription: description
   };
 }
 
