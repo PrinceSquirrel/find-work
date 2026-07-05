@@ -2699,6 +2699,36 @@ def test_agent_events_endpoint_reports_real_backend_steps(tmp_path, monkeypatch)
     ]
 
 
+def test_orchestrator_plan_lists_bounded_agents_and_manual_confirmation(tmp_path):
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    upload_response = client.post(
+        "/api/resumes",
+        files={"file": ("resume.txt", "Skills: Python, FastAPI, React".encode("utf-8"), "text/plain")},
+    )
+    resume_id = upload_response.json()["id"]
+    client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python intern"],
+            "city": "Shanghai",
+            "platforms": ["boss"],
+        },
+    )
+    job_id = client.get("/api/jobs").json()[0]["id"]
+    client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+
+    orchestrator_step = client.get("/api/agent-events").json()["orchestrator"]["last_task"]["steps"][0]
+
+    assert orchestrator_step["agent_name"] == "OrchestratorAgent"
+    assert orchestrator_step["step"] == "plan workflow"
+    assert "plan=ApplicationWriterAgent -> ReviewAgent" in orchestrator_step["output_summary"]
+    assert "requires_confirmation=platform_apply,platform_message" in orchestrator_step["output_summary"]
+    assert "safety=no_auto_apply,no_captcha_bypass,no_secret_logging" in orchestrator_step["output_summary"]
+
+
 def test_orchestrator_task_summary_survives_service_restart(tmp_path):
     db_path = tmp_path / "agent-business.sqlite3"
     app = create_app(db_path=db_path)

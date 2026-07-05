@@ -26,6 +26,7 @@ from app.services.event_stream_service import EventStreamService
 from app.services.llm_client_service import LLMCompletionResult, OpenAICompatibleClient
 from app.services.metrics_service import MetricsService
 from app.services.model_router_service import ModelRoute, ModelRouterService
+from app.services.orchestrator_planner_service import OrchestratorPlannerService
 from app.services.orchestrator_service import OrchestratorService
 from app.services.platform_session_service import PlatformSessionService
 from app.storage import SQLiteStore
@@ -53,6 +54,7 @@ class JobApplicationService:
         self.event_stream = EventStreamService()
         self.orchestrator = OrchestratorService(self.event_stream, store=store)
         self.model_router = ModelRouterService()
+        self.orchestrator_planner = OrchestratorPlannerService()
         self.llm_client = OpenAICompatibleClient()
         self.adapters = {
             "boss": BossAdapter(),
@@ -888,16 +890,14 @@ class JobApplicationService:
     def _record_orchestrator_plan(self, task_id: int | None, task_name: str, input_summary: str) -> None:
         config = self.store.get_agent_model_route("OrchestratorAgent")
         route = self.model_router.route_for_agent("OrchestratorAgent", config)
+        plan = self.orchestrator_planner.plan_for_task(task_name, input_summary)
         self._record_agent_step(
             task_id,
             "OrchestratorAgent",
             "success",
             "plan workflow",
             input_summary=f"task={task_name}; {input_summary}",
-            output_summary=(
-                f"route={route.mode}; provider={route.provider}; model={route.model}; "
-                "boundary=human_confirmed_platform_actions"
-            ),
+            output_summary=plan.to_output_summary(route),
         )
 
     def _record_agent_step(

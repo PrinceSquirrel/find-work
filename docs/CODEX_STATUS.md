@@ -1,5 +1,43 @@
 # Codex Recovery Status
 
+## 7I-1：OrchestratorAgent 低风险任务计划输出
+### 当前真实状态
+- `OrchestratorAgent` 不再只记录 route/provider/model/boundary。
+- 每个核心任务开始时，Orchestrator 会输出结构化可读计划摘要：将调用哪些 Agent、哪些动作需要用户确认、固定安全边界是什么。
+- 已覆盖的任务计划包括：`resume.parse`、`job.search`、`job.detail.refresh`、`job.detail.manual_update`、`application.materials`。
+- `application.materials` 计划会明确 `ApplicationWriterAgent -> ReviewAgent`，并声明真实平台投递和平台消息需要人工确认。
+- 安全边界固定包含：不自动投递、不绕验证码、不记录密钥。
+
+### 已完成
+- 新增 `OrchestratorPlannerService`，负责生成本地低风险任务计划。
+- `JobApplicationService._record_orchestrator_plan()` 接入计划器，把计划写入 Orchestrator 步骤 `output_summary`。
+- 新增后端测试覆盖 Orchestrator 计划必须包含 Agent 顺序、人工确认项和安全边界。
+
+### 未完成
+- 本阶段仍是本地确定性计划器，没有实际调用外部 LLM 生成计划。
+- 计划结果目前写在 `output_summary` 字符串中，还没有独立 JSON 字段。
+- 前端还没有为 Orchestrator 计划做专门的结构化展示，只能在现有 Agent 状态/任务详情里看到摘要。
+
+### 风险
+- 计划器只描述和约束流程，不会直接执行高风险动作；真实平台投递仍必须走人工确认。
+- 后续接入外部 LLM 规划时，仍需要保留 allowlist 和人工确认边界，不能让模型任意调用工具。
+
+### 下一步任务
+- 7I-2：让 `OrchestratorAgent` 在已配置主脑模型时调用 OpenAI-compatible 模型生成计划 JSON，失败时回退到本地计划器。
+- 后续继续推进 RAG / Skill Registry / MCP Gateway。
+
+### 最近修改文件
+- `backend/app/services/orchestrator_planner_service.py`
+- `backend/app/services/job_application_service.py`
+- `backend/tests/test_api_flow.py`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`python -m pytest backend\tests\test_api_flow.py::test_orchestrator_plan_lists_bounded_agents_and_manual_confirmation -q` 先失败于缺少 `plan=ApplicationWriterAgent -> ReviewAgent`。
+- 目标测试：同一命令通过。
+- Orchestrator 回归：`python -m pytest backend\tests\test_api_flow.py -k "orchestrator or agent_events" -q` 通过，5 条测试通过。
+- 后端全量：`python -m pytest -q` 通过，97 条测试通过；仅有 reportlab 的 Python 3.14 弃用警告。
+
 ## 7H-2D：PDF/OCR 明确检查入口
 ### 当前真实状态
 - 系统状态 / 后端控制台现在新增“检查 PDF/OCR”按钮。
