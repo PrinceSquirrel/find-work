@@ -199,6 +199,20 @@ export interface SystemHealthSummaryView {
   cards: SystemHealthCardView[];
 }
 
+export type SystemHealthOperationStatus = "running" | "success" | "failed";
+
+export interface SystemHealthOperationFeedback {
+  actionLabel: string;
+  status: SystemHealthOperationStatus;
+  detail: string;
+}
+
+export interface SystemHealthOperationView {
+  label: string;
+  tone: StatusTone;
+  detail: string;
+}
+
 const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
   discovered: [],
   matched: [],
@@ -305,6 +319,25 @@ export function summarizeSystemHealth(
     primaryCheck,
     recentError: recentError?.trim() ?? "",
     cards
+  };
+}
+
+export function summarizeSystemHealthOperation(
+  feedback: SystemHealthOperationFeedback | null
+): SystemHealthOperationView | null {
+  if (!feedback) {
+    return null;
+  }
+  const statusMeta: Record<SystemHealthOperationStatus, { suffix: string; tone: StatusTone }> = {
+    running: { suffix: "进行中", tone: "info" },
+    success: { suffix: "完成", tone: "success" },
+    failed: { suffix: "失败", tone: "danger" }
+  };
+  const meta = statusMeta[feedback.status];
+  return {
+    label: `${feedback.actionLabel}${meta.suffix}`,
+    tone: meta.tone,
+    detail: feedback.detail
   };
 }
 

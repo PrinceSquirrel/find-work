@@ -496,6 +496,33 @@ label span,
   padding: 10px 12px;
 }
 
+.system-health-operation {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px 12px;
+}
+
+.system-health-operation span {
+  color: var(--muted);
+}
+
+.system-health-operation.tone-info {
+  background: var(--blue-soft);
+  border-color: #a7cad8;
+}
+
+.system-health-operation.tone-success {
+  background: var(--green-soft);
+  border-color: #acd3c8;
+}
+
+.system-health-operation.tone-danger {
+  background: var(--red-soft);
+  border-color: #d29b92;
+}
+
 .extraction-block {
   border: 1px solid var(--line);
   background: #fffdf7;

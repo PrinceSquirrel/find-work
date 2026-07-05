@@ -1,5 +1,47 @@
 # Codex Recovery Status
 
+## 7H-2C：控制台操作结果与健康状态自动刷新
+### 当前真实状态
+- 系统状态 / 后端控制台的四个按钮现在有统一的最近操作提示。
+- “刷新状态”会显示进行中、完成或失败，并更新健康状态卡。
+- “测试模型”完成后会自动回刷 `/api/system/health`，控制台显示模型测试结果和健康刷新结果。
+- “启动 CDP”完成后会读取平台会话并自动回刷健康状态，不再用嵌套的刷新会话提示覆盖启动结果。
+- “刷新平台会话”完成后会显示检测到的平台标签页数量，并自动回刷健康状态。
+
+### 已完成
+- 新增 `summarizeSystemHealthOperation()`，把控制台操作状态整理成用户可读的提示行。
+- 新增单元测试覆盖 running / success / failed 操作提示。
+- `App.tsx` 新增 `systemHealthOperation` 状态和操作后健康状态回刷逻辑。
+- 控制台 UI 新增“最近操作”提示条。
+- 新增对应的 `system-health-operation` 视觉样式。
+
+### 未完成
+- 操作提示还没有持久化到后端事件流，刷新页面后不会保留。
+- “检查 PDF/OCR”仍然不是独立按钮，当前依旧通过系统健康卡展示能力状态。
+- 尚未做浏览器截图验收。
+
+### 风险
+- 操作成功但健康状态刷新失败时，主操作仍会显示结果，同时把健康刷新失败写入控制台最近错误；这符合“操作不被健康刷新二次失败打断”的设计。
+- `启动 CDP` 仍依赖本机后端能调用浏览器启动命令，若系统或浏览器路径异常，会显示失败但不会自动修复本机环境。
+
+### 下一步任务
+- 7H-2D：补一个明确的 PDF/OCR 检查入口，或者转入 OrchestratorAgent 低风险规划输出，继续向企业级 Agent 能力推进。
+- 网络恢复后需要继续 `git push`，当前本地分支仍可能比远程超前。
+
+### 最近修改文件
+- `frontend/src/lib/dashboard.ts`
+- `frontend/src/lib/dashboard.test.ts`
+- `frontend/src/App.tsx`
+- `frontend/src/styles.css`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`npm test -- --run src/lib/dashboard.test.ts -t "system health control operations"` 先失败于 `summarizeSystemHealthOperation is not a function`。
+- 目标测试：`npm test -- --run src/lib/dashboard.test.ts -t "system health"` 通过，2 条目标测试通过。
+- 类型检查：`npm run lint` 通过。
+- 前端全量测试：`npm test -- --run` 通过，42 条测试通过。
+- 前端构建：`npm run build` 通过。
+
 ## 7H-2B：系统状态控制台视觉与局部错误
 ### 当前真实状态
 - 前端系统状态控制台从普通信息块升级为绿/黄/红状态面板。

@@ -14,6 +14,7 @@ import {
   filterJobsForActiveSearchRun,
   getJobDetailQuality,
   shouldShowTailorRetryAction,
+  summarizeSystemHealthOperation,
   summarizeSystemHealth,
   buildOrchestratorSummary,
   getAllowedNextStatuses,
@@ -185,6 +186,43 @@ describe("dashboard helpers", () => {
       expect.objectContaining({ id: "model", tone: "danger", statusLabel: "异常" }),
       expect.objectContaining({ id: "ocr", tone: "warning", statusLabel: "需处理" })
     ]);
+  });
+
+  it("summarizes system health control operations into a compact result line", () => {
+    expect(summarizeSystemHealthOperation(null)).toBeNull();
+    expect(
+      summarizeSystemHealthOperation({
+        actionLabel: "测试模型",
+        status: "running",
+        detail: "正在连接 DeepSeek"
+      })
+    ).toEqual({
+      label: "测试模型进行中",
+      tone: "info",
+      detail: "正在连接 DeepSeek"
+    });
+    expect(
+      summarizeSystemHealthOperation({
+        actionLabel: "启动 CDP",
+        status: "success",
+        detail: "浏览器已启动，状态已刷新"
+      })
+    ).toEqual({
+      label: "启动 CDP完成",
+      tone: "success",
+      detail: "浏览器已启动，状态已刷新"
+    });
+    expect(
+      summarizeSystemHealthOperation({
+        actionLabel: "刷新平台会话",
+        status: "failed",
+        detail: "CDP 未连接"
+      })
+    ).toEqual({
+      label: "刷新平台会话失败",
+      tone: "danger",
+      detail: "CDP 未连接"
+    });
   });
 
   it("ranks and filters jobs by platform, keyword, and minimum score", () => {

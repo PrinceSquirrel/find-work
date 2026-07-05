@@ -23,8 +23,10 @@ import {
   shouldShowTailorRetryAction,
   summarizePlatformConfirmation,
   summarizeSystemHealth,
+  summarizeSystemHealthOperation,
   summarizeUsage
 } from "./lib/dashboard";
+import type { SystemHealthOperationFeedback } from "./lib/dashboard";
 import type {
   AgentModelRoute,
   AnalyticsBucket,
@@ -226,6 +228,7 @@ function App() {
   const [modelRouteMessage, setModelRouteMessage] = useState<string | null>(null);
   const [systemHealth, setSystemHealth] = useState<SystemHealthResponse | null>(null);
   const [recentSystemHealthError, setRecentSystemHealthError] = useState<string | null>(null);
+  const [systemHealthOperation, setSystemHealthOperation] = useState<SystemHealthOperationFeedback | null>(null);
   const [agentEvents, setAgentEvents] = useState<Awaited<ReturnType<typeof api.getAgentEvents>> | null>(null);
   const [tailorBundles, setTailorBundles] = useState<Record<number, TailorBundle>>({});
   const [tailoredRevisionDrafts, setTailoredRevisionDrafts] = useState<Record<number, string>>({});
@@ -367,6 +370,10 @@ function App() {
     () => summarizeSystemHealth(systemHealth, recentSystemHealthError),
     [recentSystemHealthError, systemHealth]
   );
+  const systemHealthOperationSummary = useMemo(
+    () => summarizeSystemHealthOperation(systemHealthOperation),
+    [systemHealthOperation]
+  );
 
   async function refreshWorkspace() {
     setBusy((current) => ({ ...current, boot: true }));
@@ -471,13 +478,42 @@ function App() {
   async function refreshSystemHealth() {
     setBusy((current) => ({ ...current, systemHealth: true }));
     setError(null);
+    setSystemHealthOperation({
+      actionLabel: "刷新状态",
+      status: "running",
+      detail: "正在读取后端、数据库、CDP、模型、PDF 和 OCR 状态。"
+    });
     try {
       setSystemHealth(await api.getSystemHealth());
       setRecentSystemHealthError(null);
+      setSystemHealthOperation({
+        actionLabel: "刷新状态",
+        status: "success",
+        detail: "系统状态已更新。"
+      });
     } catch (nextError) {
       const message = toErrorMessage(nextError);
       setRecentSystemHealthError(message);
+      setSystemHealthOperation({
+        actionLabel: "刷新状态",
+        status: "failed",
+        detail: message
+      });
       setError(message);
+    } finally {
+      setBusy((current) => ({ ...current, systemHealth: false }));
+    }
+  }
+
+  async function refreshSystemHealthAfterOperation(): Promise<boolean> {
+    setBusy((current) => ({ ...current, systemHealth: true }));
+    try {
+      setSystemHealth(await api.getSystemHealth());
+      setRecentSystemHealthError(null);
+      return true;
+    } catch (nextError) {
+      setRecentSystemHealthError(toErrorMessage(nextError));
+      return false;
     } finally {
       setBusy((current) => ({ ...current, systemHealth: false }));
     }
@@ -644,16 +680,33 @@ function App() {
     setError(null);
     setModelMessage(null);
     setModelTestResult(null);
+    setSystemHealthOperation({
+      actionLabel: "测试模型",
+      status: "running",
+      detail: "正在测试当前模型配置。"
+    });
     try {
       const result = await api.testModelConfigConnection();
       setModelTestResult(result);
-      setModelMessage(
+      const resultMessage =
         result.status === "success"
           ? `模型连接成功：${result.provider} / ${result.model} / ${result.duration_ms}ms`
-          : `模型连接失败：${result.error || "请检查 API 地址、模型名和 API Key。"}`
-      );
+          : `模型连接失败：${result.error || "请检查 API 地址、模型名和 API Key。"}`;
+      const healthUpdated = await refreshSystemHealthAfterOperation();
+      setModelMessage(resultMessage);
+      setSystemHealthOperation({
+        actionLabel: "测试模型",
+        status: result.status === "success" ? "success" : "failed",
+        detail: `${resultMessage}${healthUpdated ? "，系统状态已刷新。" : "，但系统状态刷新失败。"}`
+      });
     } catch (nextError) {
-      setError(toErrorMessage(nextError));
+      const message = toErrorMessage(nextError);
+      setSystemHealthOperation({
+        actionLabel: "测试模型",
+        status: "failed",
+        detail: message
+      });
+      setError(message);
     } finally {
       setBusy((current) => ({ ...current, modelTest: false }));
     }
@@ -867,11 +920,29 @@ function App() {
   async function handleRefreshSessions() {
     setBusy((current) => ({ ...current, sessions: true }));
     setError(null);
+    setSystemHealthOperation({
+      actionLabel: "刷新平台会话",
+      status: "running",
+      detail: "正在检查 BOSS/实习僧浏览器标签页。"
+    });
     try {
       const response = await api.getPlatformSessions();
       setPlatformSessions(response.sessions);
+      const detectedCount = response.sessions.filter((session) => session.state === "tab_detected").length;
+      const healthUpdated = await refreshSystemHealthAfterOperation();
+      setSystemHealthOperation({
+        actionLabel: "刷新平台会话",
+        status: "success",
+        detail: `已检测 ${detectedCount}/${response.sessions.length} 个平台标签页${healthUpdated ? "，系统状态已刷新。" : "，但系统状态刷新失败。"}`
+      });
     } catch (nextError) {
-      setError(toErrorMessage(nextError));
+      const message = toErrorMessage(nextError);
+      setSystemHealthOperation({
+        actionLabel: "刷新平台会话",
+        status: "failed",
+        detail: message
+      });
+      setError(message);
     } finally {
       setBusy((current) => ({ ...current, sessions: false }));
     }
@@ -881,6 +952,11 @@ function App() {
     setBusy((current) => ({ ...current, launchCdp: true }));
     setError(null);
     setCdpLaunchMessage(null);
+    setSystemHealthOperation({
+      actionLabel: "启动 CDP",
+      status: "running",
+      detail: "正在启动本机 CDP 浏览器。"
+    });
     try {
       const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
       const response = await fetch(`${apiBaseUrl}/api/browser/launch-cdp`, { method: "POST" });
@@ -889,10 +965,24 @@ function App() {
         throw new Error(payload.detail || `启动浏览器失败 (${response.status})`);
       }
       const payload = (await response.json()) as { message?: string };
-      setCdpLaunchMessage(payload.message ?? "已启动 CDP 浏览器。");
-      await handleRefreshSessions();
+      const launchMessage = payload.message ?? "已启动 CDP 浏览器。";
+      const sessionResponse = await api.getPlatformSessions();
+      setPlatformSessions(sessionResponse.sessions);
+      const healthUpdated = await refreshSystemHealthAfterOperation();
+      setCdpLaunchMessage(launchMessage);
+      setSystemHealthOperation({
+        actionLabel: "启动 CDP",
+        status: "success",
+        detail: `${launchMessage}${healthUpdated ? " 系统状态已刷新。" : " 但系统状态刷新失败。"}`
+      });
     } catch (nextError) {
-      setError(toErrorMessage(nextError));
+      const message = toErrorMessage(nextError);
+      setSystemHealthOperation({
+        actionLabel: "启动 CDP",
+        status: "failed",
+        detail: message
+      });
+      setError(message);
     } finally {
       setBusy((current) => ({ ...current, launchCdp: false }));
     }
@@ -1257,6 +1347,12 @@ function App() {
             {busy.sessions ? "刷新中" : "刷新平台会话"}
           </button>
         </div>
+        {systemHealthOperationSummary ? (
+          <div className={`system-health-operation tone-${systemHealthOperationSummary.tone}`} role="status">
+            <b>{systemHealthOperationSummary.label}</b>
+            <span>{systemHealthOperationSummary.detail}</span>
+          </div>
+        ) : null}
         {systemHealthSummary.recentError ? (
           <div className="system-health-error" role="status">
             <b>最近错误</b>
