@@ -175,6 +175,38 @@ describe("api client", () => {
     );
   });
 
+  test("deleteModelConfigApiKey calls the saved key deletion endpoint", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        provider: "openai-compatible",
+        model: "deepseek-v4-pro",
+        base_url: "https://api.deepseek.com",
+        api_key_env_var: "",
+        api_key_secret_id: "",
+        api_key_masked: "",
+        api_key_configured: false,
+        enabled: true,
+        estimation_only: false,
+        timeout_ms: 90000,
+        input_price_per_million: 1,
+        output_price_per_million: 2
+      })
+    } as Response);
+
+    const result = await api.deleteModelConfigApiKey();
+
+    expect(result.api_key_configured).toBe(false);
+    expect(result.api_key_masked).toBe("");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/model-config/api-key",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({ "Content-Type": "application/json" })
+      })
+    );
+  });
+
   test("testModelConfigConnection posts to the model connection endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

@@ -230,6 +230,12 @@ export const api = {
     });
   },
 
+  deleteModelConfigApiKey(): Promise<ModelConfig> {
+    return request<ModelConfig>("/api/model-config/api-key", {
+      method: "DELETE"
+    });
+  },
+
   getModelProfiles(): Promise<ModelProfilesResponse> {
     return request<ModelProfilesResponse>("/api/model-profiles");
   },

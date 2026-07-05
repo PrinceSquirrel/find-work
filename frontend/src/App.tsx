@@ -137,6 +137,7 @@ type BusyState = {
   manualResumeText: boolean;
   revisionTailoredResumeId: number | null;
   modelTest: boolean;
+  modelKeyDelete: boolean;
   modelRouteAgent: string | null;
   modelProfileAction: "save" | "apply" | "delete" | null;
 };
@@ -157,6 +158,7 @@ const initialBusy: BusyState = {
   manualResumeText: false,
   revisionTailoredResumeId: null,
   modelTest: false,
+  modelKeyDelete: false,
   modelRouteAgent: null,
   modelProfileAction: null
 };
@@ -580,6 +582,31 @@ function App() {
       setError(toErrorMessage(nextError));
     } finally {
       setBusy((current) => ({ ...current, modelProfileAction: null }));
+    }
+  }
+
+  async function handleDeleteModelApiKey() {
+    if (!modelConfig?.api_key_masked) {
+      setModelMessage("当前没有本地保存的 API Key 可删除。");
+      return;
+    }
+    if (!window.confirm("删除当前保存的模型 API Key？删除后需要重新粘贴 Key 才能调用真实模型。")) {
+      return;
+    }
+    setBusy((current) => ({ ...current, modelKeyDelete: true }));
+    setError(null);
+    setModelMessage(null);
+    setModelTestResult(null);
+    try {
+      const saved = await api.deleteModelConfigApiKey();
+      setModelConfig(saved);
+      setModelDraft(toModelConfigUpdate(saved));
+      setModelApiKey("");
+      setModelMessage(saved.api_key_configured ? `已删除本地保存 Key，当前仍显示为已配置：${keyStatusText(saved)}。` : "已删除当前保存的 API Key。");
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, modelKeyDelete: false }));
     }
   }
 
@@ -1340,6 +1367,9 @@ function App() {
                 </button>
                 <button type="button" onClick={() => void handleDeleteModelProfile()} disabled={selectedModelProfileId === null || busy.modelProfileAction === "delete"}>
                   {busy.modelProfileAction === "delete" ? "删除中..." : "删除档案"}
+                </button>
+                <button type="button" onClick={() => void handleDeleteModelApiKey()} disabled={!modelConfig?.api_key_masked || busy.modelKeyDelete}>
+                  {busy.modelKeyDelete ? "删除中..." : "删除当前 Key"}
                 </button>
                 <button type="button" onClick={() => void handleTestModelConnection()} disabled={busy.modelTest}>
                   {busy.modelTest ? "测试中..." : "测试连接"}

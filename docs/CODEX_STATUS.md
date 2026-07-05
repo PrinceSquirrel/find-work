@@ -1,5 +1,46 @@
 # Codex Recovery Status
 
+## 7G-4B：前端删除当前保存 API Key
+### 当前真实状态
+- “模型 / API”面板新增“删除当前 Key”按钮。
+- 按钮只在后端返回了本地保存 Key 的脱敏值时启用，避免把环境变量模式误判为可从页面删除。
+- 点击后会二次确认，然后调用 `DELETE /api/model-config/api-key`。
+- 删除成功后会刷新当前模型配置、清空 Key 输入框、清空模型连接测试结果，并显示删除结果提示。
+
+### 已完成
+- 前端 API client 新增 `deleteModelConfigApiKey()`。
+- API 单测覆盖 `DELETE /api/model-config/api-key` 请求。
+- `App.tsx` 新增删除 Key 忙碌状态、二次确认和模型配置回填。
+- 模型操作区新增“删除当前 Key”按钮。
+
+### 未完成
+- 模型档案和 Agent 路由自己的本地 Key 删除按钮还未做；当前只删除全局主模型 Key。
+- 还没有提供“撤销删除”或历史 Key 恢复，删除后需要用户重新粘贴。
+
+### 风险
+- 如果用户通过环境变量提供 Key，按钮不会因为环境变量而启用；这是为了避免误导用户以为能从前端删除系统环境变量。
+- 删除后如果后端仍通过其他来源检测到 Key，状态提示会显示仍已配置。
+
+### 下一步任务
+- 7G-5：让 OrchestratorAgent 在任务创建时记录编排路由证据，并逐步接入低风险规划。
+- 7H：新增一眼看懂的系统状态 / 后端控制台。
+- 后续扩展：模型档案和 Agent 路由级别的 Key 删除。
+
+### 最近修改文件
+- `frontend/src/lib/api.ts`
+- `frontend/src/lib/api.test.ts`
+- `frontend/src/App.tsx`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`npm test -- --run src/lib/api.test.ts -t deleteModelConfigApiKey` 先失败于 `api.deleteModelConfigApiKey is not a function`。
+- 绿测：同一命令通过。
+- `npm test -- --run` 通过，39 条前端测试通过。
+- `npm run lint` 通过。
+- `npm run build` 通过。
+- `python -m pytest backend\tests\test_api_flow.py::test_model_config_saved_api_key_can_be_deleted -q` 通过。
+- `git diff --check` 通过，仅有 Windows 行尾转换提示。
+
 ## 7G-4A：删除当前保存 API Key（后端接口）
 ### 当前真实状态
 - 后端新增 `DELETE /api/model-config/api-key`，用于清空当前全局模型配置中本地保存的真实 API Key。
