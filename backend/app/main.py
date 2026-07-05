@@ -28,6 +28,7 @@ from app.schemas import (
     SkillDefinition,
     SkillRunRequest,
     StatusPatchRequest,
+    SystemHealthResponse,
     TailorRequest,
 )
 from app.services import JobApplicationService
@@ -37,6 +38,7 @@ from app.services.job_application_service import LowQualityJobDetailError, Platf
 from app.services.llm_client_service import LLMClientUnavailable, OpenAICompatibleClient
 from app.services.pdf_service import TailoredResumePdfService
 from app.services.platform_session_service import CdpBrowserLauncher, PlatformSessionService
+from app.services.system_health_service import SystemHealthService
 from app.storage import SQLiteStore
 
 
@@ -109,6 +111,10 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/system/health")
+    def system_health() -> SystemHealthResponse:
+        return SystemHealthService(app.state.service.store).inspect()
 
     @app.get("/api/model-config")
     def get_model_config():

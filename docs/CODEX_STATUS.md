@@ -1,5 +1,45 @@
 # Codex Recovery Status
 
+## 7H-1：系统状态 / 后端控制台 API
+### 当前真实状态
+- 后端新增 `GET /api/system/health`，用于给前端“系统状态 / 后端控制台”提供绿/黄/红状态卡数据。
+- 当前状态卡包括：后端运行、数据库、CDP 浏览器、平台会话、模型连接、PDF 转换器、OCR 能力。
+- 模型状态只返回 provider、model、是否启用、是否估算、是否配置 Key 和脱敏 Key，不返回真实 API Key 明文。
+- 本阶段只做后端 API；前端的一眼看懂控制台页面还未接入。
+
+### 已完成
+- 新增 `SystemHealthCheck` / `SystemHealthResponse` 类型。
+- 新增 `SystemHealthService` 聚合数据库、CDP、平台会话、模型、PDF、OCR 检测。
+- FastAPI 新增 `/api/system/health` 路由。
+- 后端测试覆盖健康状态卡结构和 API Key 不泄露。
+
+### 未完成
+- 前端还没有“系统状态 / 后端控制台”页面或按钮。
+- 健康接口当前只检测模型配置状态，不主动调用远端模型；真实连通性仍通过现有“测试模型连接”按钮完成。
+- PDF/OCR 检测是依赖存在性检测，不代表每个文件都一定能转换或识别成功。
+
+### 风险
+- `database` 检测使用当前本地 SQLite 连接，适合本地单用户版本；未来多用户或云部署需要更细的迁移/锁检测。
+- `pdf_converter` 只检测 Word COM / LibreOffice 可用性；实际导出仍可能受模板内容、权限或 Word 弹窗影响。
+- `ocr` 只检测 Python 依赖，若本机 Tesseract 引擎未正确安装，图片 OCR 仍会降级到手动补全文字。
+
+### 下一步任务
+- 7H-2：前端新增“系统状态 / 后端控制台”区域，展示状态卡并提供测试模型、启动 CDP、刷新会话、检查 PDF/OCR、查看最近错误等入口。
+- 后续：让 OrchestratorAgent 输出低风险任务规划摘要，并继续推进 RAG / Skill / MCP。
+
+### 最近修改文件
+- `backend/app/schemas.py`
+- `backend/app/services/system_health_service.py`
+- `backend/app/main.py`
+- `backend/tests/test_api_flow.py`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`python -m pytest backend\tests\test_api_flow.py::test_system_health_endpoint_returns_user_friendly_status_cards backend\tests\test_api_flow.py::test_system_health_model_card_never_leaks_saved_api_key -q` 先失败于 `/api/system/health` 返回 404。
+- 绿测：同一命令通过，2 条测试通过。
+- 后端全量：`python -m pytest -q` 通过，96 条测试通过，只有 reportlab 的 Python 3.14 弃用预告警告。
+- 空白检查：`git diff --check` 通过，仅有 Windows 换行转换提示。
+
 ## 7G-5：OrchestratorAgent 任务编排证据
 ### 当前真实状态
 - `OrchestratorAgent` 不再只是模型路由配置项；后端每次创建核心任务时会先记录一条 `plan workflow` 编排步骤。

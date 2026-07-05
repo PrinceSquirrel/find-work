@@ -1591,6 +1591,68 @@ def test_model_config_accepts_saved_api_key_without_leaking_plaintext(tmp_path, 
     assert secret not in str(payload)
 
 
+def test_system_health_endpoint_returns_user_friendly_status_cards(tmp_path):
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] in {"green", "yellow", "red"}
+    checks = {check["id"]: check for check in payload["checks"]}
+    assert {
+        "backend",
+        "database",
+        "cdp_browser",
+        "platform_sessions",
+        "model",
+        "pdf_converter",
+        "ocr",
+    }.issubset(checks)
+    assert checks["backend"]["label"] == "后端运行"
+    assert checks["backend"]["status"] == "green"
+    assert checks["database"]["status"] == "green"
+    for check in checks.values():
+        assert check["summary"]
+        assert check["next_action"] is not None
+
+
+def test_system_health_model_card_never_leaks_saved_api_key(tmp_path):
+    db_path = tmp_path / "agent-business.sqlite3"
+    app = create_app(db_path=db_path)
+    client = TestClient(app)
+    secret = "sk-secret-value-that-must-not-leak"
+
+    client.put(
+        "/api/model-config",
+        json={
+            "provider": "deepseek",
+            "model": "deepseek-chat",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key_env_var": "",
+            "api_key": secret,
+            "enabled": True,
+            "estimation_only": False,
+            "timeout_ms": 30000,
+            "input_price_per_million": 1.0,
+            "output_price_per_million": 2.0,
+        },
+    )
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    raw_payload = json.dumps(payload, ensure_ascii=False)
+    assert secret not in raw_payload
+    model_check = {check["id"]: check for check in payload["checks"]}["model"]
+    assert model_check["status"] == "green"
+    assert model_check["metadata"]["model"] == "deepseek-chat"
+    assert model_check["metadata"]["api_key_configured"] is True
+    assert model_check["metadata"]["api_key_masked"].endswith("leak")
+
+
 def test_model_config_saved_api_key_can_be_deleted(tmp_path, monkeypatch):
     secret = "sk-live-secret-1234567890"
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

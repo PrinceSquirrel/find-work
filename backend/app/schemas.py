@@ -414,6 +414,22 @@ class McpToolCallResult(BaseModel):
     duration_ms: int = 0
 
 
+class SystemHealthCheck(BaseModel):
+    id: str
+    label: str
+    status: str
+    summary: str
+    detail: str = ""
+    next_action: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SystemHealthResponse(BaseModel):
+    status: str
+    generated_at: datetime = Field(default_factory=now_utc)
+    checks: list[SystemHealthCheck]
+
+
 class SearchRunRequest(BaseModel):
     resume_id: int
     keywords: list[str] = Field(default_factory=list)
