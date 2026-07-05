@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 from pathlib import Path
@@ -299,6 +300,39 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
                 "Content-Disposition": f'attachment; filename="tailored-resume-{tailored_resume_id}.pdf"',
             },
         )
+
+    @app.get("/api/tailored-resumes/{tailored_resume_id}/revision")
+    def get_tailored_resume_revision(tailored_resume_id: int):
+        try:
+            return app.state.service.store.get_tailored_resume_revision(tailored_resume_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/api/tailored-resumes/{tailored_resume_id}/revision")
+    def update_tailored_resume_revision(tailored_resume_id: int, payload: dict[str, str]):
+        try:
+            return app.state.service.store.update_tailored_resume_revision(
+                tailored_resume_id,
+                payload.get("resume_rewrite", ""),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/tailored-resumes/{tailored_resume_id}/preview")
+    def preview_tailored_resume_revision(tailored_resume_id: int):
+        try:
+            revision = app.state.service.store.get_tailored_resume_revision(tailored_resume_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        plain_text = str(revision["editable_text"])
+        escaped_lines = [html.escape(line) for line in plain_text.splitlines()]
+        return {
+            "id": revision["id"],
+            "plain_text": plain_text,
+            "html": "<article class=\"resume-preview\">" + "<br />".join(escaped_lines) + "</article>",
+        }
 
     @app.post("/api/jobs/{job_id}/apply-record", status_code=201)
     def create_application(job_id: int, payload: ApplyRecordRequest):

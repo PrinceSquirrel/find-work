@@ -1,5 +1,43 @@
 # Codex Recovery Status
 
+## 7F-1：定制简历在线编辑 Revision/Preview 后端
+### 当前真实状态
+- 后端新增 `GET /api/tailored-resumes/{id}/revision`，可以读取当前可编辑简历正文。
+- 后端新增 `PATCH /api/tailored-resumes/{id}/revision`，可以保存用户在线编辑后的简历正文。
+- 后端新增 `GET /api/tailored-resumes/{id}/preview`，返回当前 revision 的纯文本和简单 HTML 预览。
+- 保存 revision 后会同步更新 `resume_text`、`resume_rewrite`、`project_rewrite`，因此现有 PDF 下载链路会使用最新编辑内容。
+
+### 已完成
+- `SQLiteStore` 增加读取和更新 tailored resume revision 的方法。
+- FastAPI 增加 revision 读取、保存和 preview 路由。
+- 回归测试覆盖：读取初始 revision、保存编辑文本、preview 返回新内容、PDF 渲染拿到编辑后的文本、空文本返回 400。
+
+### 未完成
+- 前端还没有在线编辑器 UI；当前只能通过 API 调用 revision/preview。
+- preview 目前是轻量 HTML，不是最终 PDF 渲染预览。
+- 还没有 revision 历史版本表；第一版只保留最新编辑版本。
+
+### 风险
+- 当前 PATCH 会覆盖 `resume_text/resume_rewrite/project_rewrite` 三个字段，适合第一版“最新编辑即当前版本”；如果后续要保留 AI 原始输出，需要新增历史表。
+- preview HTML 只做基础转义和换行，不代表最终 DOCX/PDF 排版。
+
+### 下一步任务
+- 7F-2：前端人审材料区接入在线编辑器和实时预览，保存后刷新当前材料。
+- 7G：简化模型/API 设置，支持真实 Key 本地加密保存、隐藏、测试和删除。
+- 7H：新增一眼看懂的后端操作页。
+
+### 最近修改文件
+- `backend/app/storage.py`
+- `backend/app/main.py`
+- `backend/tests/test_api_flow.py`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`python -m pytest backend\tests\test_api_flow.py::test_tailored_resume_revision_can_be_edited_previewed_and_used_for_pdf -q` 先失败于 `/revision` 返回 404。
+- 绿测：同一命令通过。
+- `python -m pytest backend\tests\test_api_flow.py::test_tailored_resume_revision_can_be_edited_previewed_and_used_for_pdf backend\tests\test_api_flow.py::test_tailored_resume_pdf_can_be_downloaded_after_material_generation backend\tests\test_api_flow.py::test_tailored_resume_pdf_requires_docx_template -q` 通过。
+- `git diff --check` 通过，仅有 Windows 行尾转换提示。
+
 ## 7E-5：前端简历读取状态 + 手动补全入口
 ### 当前真实状态
 - 简历上传区现在支持选择 `.png/.jpg/.jpeg` 图片简历，文案已从 `txt/pdf/docx` 扩展为 `txt/pdf/docx/png/jpg`。

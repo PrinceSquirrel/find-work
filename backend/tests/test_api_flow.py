@@ -2198,6 +2198,75 @@ def test_tailored_resume_pdf_can_be_downloaded_after_material_generation(tmp_pat
     assert client.get("/api/tailored-resumes/999999/pdf").status_code == 404
 
 
+def test_tailored_resume_revision_can_be_edited_previewed_and_used_for_pdf(tmp_path, monkeypatch):
+    edited_text = "用户在线编辑后的简历改写：突出 Python、React 和 Agent 工作台。"
+
+    class FakeTailoredResumePdfService:
+        def render(self, tailored_bundle, template_bytes):
+            assert edited_text in tailored_bundle["resume_rewrite"]
+            return _one_page_pdf("edited resume pdf")
+
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module, "TailoredResumePdfService", lambda: FakeTailoredResumePdfService())
+    db_path = tmp_path / "agent-business.sqlite3"
+    app = create_app(db_path=db_path)
+    client = TestClient(app)
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("张三")
+    document.add_paragraph("项目经历")
+    document.add_paragraph("求职 Agent 工作台，负责 Python 和 React。")
+    buffer = BytesIO()
+    document.save(buffer)
+    resume_response = client.post(
+        "/api/resumes",
+        files={
+            "file": (
+                "resume.docx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    resume_id = resume_response.json()["id"]
+    client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python 实习"],
+            "city": "上海",
+            "platforms": ["boss"],
+        },
+    )
+    job_id = client.get("/api/jobs").json()[0]["id"]
+    tailor_response = client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+    tailored_id = tailor_response.json()["id"]
+
+    initial_revision = client.get(f"/api/tailored-resumes/{tailored_id}/revision")
+    assert initial_revision.status_code == 200
+    assert initial_revision.json()["editable_text"]
+
+    update_response = client.patch(
+        f"/api/tailored-resumes/{tailored_id}/revision",
+        json={"resume_rewrite": edited_text},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["editable_text"] == edited_text
+
+    preview_response = client.get(f"/api/tailored-resumes/{tailored_id}/preview")
+    assert preview_response.status_code == 200
+    preview = preview_response.json()
+    assert preview["plain_text"] == edited_text
+    assert edited_text in preview["html"]
+
+    pdf_response = client.get(f"/api/tailored-resumes/{tailored_id}/pdf")
+    assert pdf_response.status_code == 200
+    assert pdf_response.content.startswith(b"%PDF")
+    assert client.patch(f"/api/tailored-resumes/{tailored_id}/revision", json={"resume_rewrite": "   "}).status_code == 400
+
+
 def test_tailored_resume_pdf_requires_docx_template(tmp_path):
     app = create_app(db_path=tmp_path / "agent-business.sqlite3")
     client = TestClient(app)

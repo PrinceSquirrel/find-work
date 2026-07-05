@@ -1029,6 +1029,41 @@ class SQLiteStore:
             "created_at": row["created_at"],
         }
 
+    def get_tailored_resume_revision(self, tailored_resume_id: int) -> dict[str, Any]:
+        bundle = self.get_tailor_bundle(tailored_resume_id)
+        editable_text = (
+            str(bundle.get("resume_rewrite") or "")
+            or str(bundle.get("project_rewrite") or "")
+            or str(bundle.get("resume_text") or "")
+        )
+        return {
+            "id": bundle["id"],
+            "job_id": bundle["job_id"],
+            "resume_id": bundle["resume_id"],
+            "editable_text": editable_text,
+            "resume_rewrite": str(bundle.get("resume_rewrite") or ""),
+            "project_rewrite": str(bundle.get("project_rewrite") or ""),
+            "resume_text": str(bundle.get("resume_text") or ""),
+            "created_at": bundle["created_at"],
+        }
+
+    def update_tailored_resume_revision(self, tailored_resume_id: int, resume_rewrite: str) -> dict[str, Any]:
+        resume_rewrite = resume_rewrite.strip()
+        if not resume_rewrite:
+            raise ValueError("简历改写正文不能为空")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tailored_resumes
+                SET resume_text = ?, resume_rewrite = ?, project_rewrite = ?
+                WHERE id = ?
+                """,
+                (resume_rewrite, resume_rewrite, resume_rewrite, tailored_resume_id),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"Tailored resume {tailored_resume_id} not found")
+        return self.get_tailored_resume_revision(tailored_resume_id)
+
     def create_application(
         self,
         job: JobPosting,
