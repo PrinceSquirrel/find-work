@@ -16,6 +16,22 @@ class ModelRoute:
 
 class ModelRouterService:
     def route_for_agent(self, agent_name: str, config: ModelConfig) -> ModelRoute:
+        if agent_name == "OrchestratorAgent":
+            if config.enabled and not config.estimation_only and config.api_key_configured:
+                return ModelRoute(
+                    agent_name=agent_name,
+                    mode="external_planner",
+                    provider=config.provider,
+                    model=config.model,
+                    reason="OrchestratorAgent route is configured; this stage records planning evidence only.",
+                )
+            return ModelRoute(
+                agent_name=agent_name,
+                mode="local_planner",
+                provider="local",
+                model="local-orchestrator",
+                reason="OrchestratorAgent plans the bounded workflow locally because its model route is disabled or missing API key.",
+            )
         if agent_name in {"ApplicationWriterAgent", "JobMatchAgent"}:
             if config.enabled and not config.estimation_only and config.api_key_configured:
                 return ModelRoute(

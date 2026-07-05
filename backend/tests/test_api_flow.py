@@ -1074,9 +1074,12 @@ def test_single_job_detail_can_be_refreshed_from_browser_cdp(tmp_path, monkeypat
     assert events["orchestrator"]["last_task"]["task_name"] == "job.detail.refresh"
     assert events["orchestrator"]["last_task"]["status"] == "success"
     steps = events["orchestrator"]["last_task"]["steps"]
-    assert steps[0]["agent_name"] == "JobSearchAgent"
-    assert steps[0]["status"] == "running"
-    assert steps[0]["step"] == "refresh job detail"
+    assert steps[0]["agent_name"] == "OrchestratorAgent"
+    assert steps[0]["status"] == "success"
+    assert steps[0]["step"] == "plan workflow"
+    assert steps[1]["agent_name"] == "JobSearchAgent"
+    assert steps[1]["status"] == "running"
+    assert steps[1]["step"] == "refresh job detail"
     assert steps[-1]["status"] == "success"
     assert "detail_fetched" in steps[-1]["output_summary"]
 
@@ -1187,8 +1190,10 @@ def test_manual_job_detail_update_recalculates_match_and_records_agent_event(tmp
     assert events["orchestrator"]["last_task"]["task_name"] == "job.detail.manual_update"
     assert events["orchestrator"]["last_task"]["status"] == "success"
     steps = events["orchestrator"]["last_task"]["steps"]
-    assert steps[0]["agent_name"] == "JobMatchAgent"
-    assert steps[0]["status"] == "running"
+    assert steps[0]["agent_name"] == "OrchestratorAgent"
+    assert steps[0]["status"] == "success"
+    assert steps[1]["agent_name"] == "JobMatchAgent"
+    assert steps[1]["status"] == "running"
     assert steps[-1]["status"] == "success"
     assert "score=" in steps[-1]["output_summary"]
 
@@ -2557,7 +2562,14 @@ def test_tailor_routes_application_writer_through_model_router(tmp_path, monkeyp
     assert payload["review"]["llm"]["route"]["mode"] == "external"
     assert payload["review"]["llm"]["review_route"]["mode"] == "external"
     assert payload["review"]["llm"]["review_route"]["model"] == "deepseek-v4-review"
-    assert FakeModelRouterService.requested_agents == ["JobMatchAgent", "ApplicationWriterAgent", "ReviewAgent"]
+    assert FakeModelRouterService.requested_agents == [
+        "OrchestratorAgent",
+        "OrchestratorAgent",
+        "JobMatchAgent",
+        "OrchestratorAgent",
+        "ApplicationWriterAgent",
+        "ReviewAgent",
+    ]
     assert ("ReviewAgent", "deepseek-v4-review") in FakeModelRouterService.requested_configs
 
 
@@ -2595,6 +2607,8 @@ def test_agent_events_endpoint_reports_real_backend_steps(tmp_path, monkeypatch)
     payload = response.json()
     agents = {agent["agent_name"]: agent for agent in payload["agents"]}
     assert payload["current_running_agent"] is None
+    assert agents["OrchestratorAgent"]["status"] == "success"
+    assert "route=" in agents["OrchestratorAgent"]["output_summary"]
     assert agents["ResumeParserAgent"]["status"] == "success"
     assert agents["JobSearchAgent"]["status"] == "success"
     assert agents["JobMatchAgent"]["status"] == "success"
@@ -2607,10 +2621,15 @@ def test_agent_events_endpoint_reports_real_backend_steps(tmp_path, monkeypatch)
     assert orchestrator["current_task_id"] is None
     assert orchestrator["last_task"]["task_name"] == "application.materials"
     assert orchestrator["last_task"]["status"] == "success"
+    orchestrator_step = orchestrator["last_task"]["steps"][0]
+    assert orchestrator_step["agent_name"] == "OrchestratorAgent"
+    assert orchestrator_step["step"] == "plan workflow"
+    assert "model=" in orchestrator_step["output_summary"]
     assert [
         f"{step['agent_name']}:{step['status']}"
         for step in orchestrator["last_task"]["steps"]
     ] == [
+        "OrchestratorAgent:success",
         "ApplicationWriterAgent:running",
         "ApplicationWriterAgent:success",
         "ReviewAgent:running",
@@ -2650,6 +2669,7 @@ def test_orchestrator_task_summary_survives_service_restart(tmp_path):
     assert orchestrator["last_task"]["task_name"] == "application.materials"
     assert orchestrator["last_task"]["status"] == "success"
     assert [step["agent_name"] for step in orchestrator["last_task"]["steps"]] == [
+        "OrchestratorAgent",
         "ApplicationWriterAgent",
         "ApplicationWriterAgent",
         "ReviewAgent",
@@ -2688,6 +2708,7 @@ def test_orchestrator_task_detail_endpoint_returns_steps(tmp_path):
     assert payload["task_name"] == "application.materials"
     assert payload["status"] == "success"
     assert [step["agent_name"] for step in payload["steps"]] == [
+        "OrchestratorAgent",
         "ApplicationWriterAgent",
         "ApplicationWriterAgent",
         "ReviewAgent",

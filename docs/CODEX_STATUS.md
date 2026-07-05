@@ -1,5 +1,43 @@
 # Codex Recovery Status
 
+## 7G-5：OrchestratorAgent 任务编排证据
+### 当前真实状态
+- `OrchestratorAgent` 不再只是模型路由配置项；后端每次创建核心任务时会先记录一条 `plan workflow` 编排步骤。
+- 已接入的任务入口包括：`resume.parse`、`job.search`、`job.detail.refresh`、`job.detail.manual_update`、`application.materials`。
+- 编排步骤会显示当前总模型大脑路由：`local_planner` 或 `external_planner`，并记录 provider/model 和人工确认边界。
+- 本阶段只记录编排证据，不让总模型自动投递、不绕验证码、不执行任意命令。
+
+### 已完成
+- `ModelRouterService` 新增 `OrchestratorAgent` 路由判断。
+- `JobApplicationService` 在核心任务创建后写入 `OrchestratorAgent: success / plan workflow` 事件。
+- 后端测试更新并覆盖 Agent 状态、任务详情、服务重启后的步骤恢复和模型路由调用顺序。
+
+### 未完成
+- `OrchestratorAgent` 还没有真正调用外部 LLM 生成任务计划；当前只是可观察的编排路由证据。
+- 还没有把 7H 的“系统状态 / 后端控制台”页面做出来。
+- RAG / Skill / MCP 企业级扩展仍排在后续阶段。
+
+### 风险
+- Agent 事件列表会多一条 OrchestratorAgent 步骤，依赖旧步骤顺序的测试或前端逻辑需要按新语义理解。
+- `external_planner` 当前表示“已配置可用主脑模型路线”，不等于已经调用模型消费 token。
+
+### 下一步任务
+- 7H：新增一眼看懂的系统状态 / 后端控制台，展示后端、数据库、CDP、平台会话、模型、PDF、OCR 状态。
+- 后续再做 OrchestratorAgent 的低风险 LLM 规划输出，但必须保持人审边界。
+
+### 最近修改文件
+- `backend/app/services/model_router_service.py`
+- `backend/app/services/job_application_service.py`
+- `backend/tests/test_api_flow.py`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`python -m pytest backend\tests\test_api_flow.py::test_agent_events_endpoint_reports_real_backend_steps backend\tests\test_api_flow.py::test_single_job_detail_can_be_refreshed_from_browser_cdp backend\tests\test_api_flow.py::test_manual_job_detail_update_recalculates_match_and_records_agent_event -q` 先失败于缺少 `OrchestratorAgent` 步骤。
+- 绿测：同一命令通过，3 条测试通过。
+- 相关回归：`python -m pytest backend\tests\test_api_flow.py -k "agent_events or orchestrator or model_route or tailor_routes_application_writer" -q` 通过，9 条测试通过。
+- 后端全量：`python -m pytest -q` 通过，94 条测试通过，只有 reportlab 的 Python 3.14 弃用预告警告。
+- 空白检查：`git diff --check` 通过，仅有 Windows 换行转换提示。
+
 ## 7G-4B：前端删除当前保存 API Key
 ### 当前真实状态
 - “模型 / API”面板新增“删除当前 Key”按钮。

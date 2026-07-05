@@ -61,6 +61,7 @@ class JobApplicationService:
 
     def upload_resume(self, filename: str, content: bytes):
         task_id = self.orchestrator.start_task("resume.parse", filename)
+        self._record_orchestrator_plan(task_id, "resume.parse", filename)
         self._record_agent_step(task_id, "ResumeParserAgent", "running", "parse resume", input_summary=filename)
         try:
             parsed = self.resume_parser.parse(filename, content)
@@ -113,6 +114,7 @@ class JobApplicationService:
             f"city={city}; keywords={','.join(keywords)}"
         )
         task_id = self.orchestrator.start_task("job.search", input_summary)
+        self._record_orchestrator_plan(task_id, "job.search", input_summary)
         unknown_platforms = [platform for platform in platforms if platform not in self.adapters]
         if unknown_platforms:
             error = f"Unsupported platforms: {', '.join(unknown_platforms)}"
@@ -422,6 +424,7 @@ class JobApplicationService:
     def refresh_job_detail(self, job_id: int) -> dict[str, Any]:
         task_input = f"job_id={job_id}"
         task_id = self.orchestrator.start_task("job.detail.refresh", task_input)
+        self._record_orchestrator_plan(task_id, "job.detail.refresh", task_input)
         self._record_agent_step(
             task_id,
             "JobSearchAgent",
@@ -485,6 +488,7 @@ class JobApplicationService:
             raise ValueError("Job description cannot be empty.")
         task_input = f"job_id={job_id}; chars={len(description)}"
         task_id = self.orchestrator.start_task("job.detail.manual_update", task_input)
+        self._record_orchestrator_plan(task_id, "job.detail.manual_update", task_input)
         self._record_agent_step(
             task_id,
             "JobMatchAgent",
@@ -545,6 +549,7 @@ class JobApplicationService:
         job = self.store.get_job(job_id)
         task_input = f"resume_id={resume_id}; job_id={job_id}; company={job.company}; title={job.title}"
         task_id = self.orchestrator.start_task("application.materials", task_input)
+        self._record_orchestrator_plan(task_id, "application.materials", task_input)
         try:
             self._ensure_job_detail_ready_for_tailor(job)
         except LowQualityJobDetailError as exc:
@@ -879,6 +884,21 @@ class JobApplicationService:
     def _record_usage(self, agent_name: str, prompt: str, completion: str) -> None:
         entry = self.metrics.estimate_and_record(agent_name, prompt, completion)
         self.store.save_llm_usage(entry)
+
+    def _record_orchestrator_plan(self, task_id: int | None, task_name: str, input_summary: str) -> None:
+        config = self.store.get_agent_model_route("OrchestratorAgent")
+        route = self.model_router.route_for_agent("OrchestratorAgent", config)
+        self._record_agent_step(
+            task_id,
+            "OrchestratorAgent",
+            "success",
+            "plan workflow",
+            input_summary=f"task={task_name}; {input_summary}",
+            output_summary=(
+                f"route={route.mode}; provider={route.provider}; model={route.model}; "
+                "boundary=human_confirmed_platform_actions"
+            ),
+        )
 
     def _record_agent_step(
         self,
