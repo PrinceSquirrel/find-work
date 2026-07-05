@@ -118,6 +118,10 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     def update_model_config(payload: ModelConfigUpdate):
         return app.state.service.store.save_model_config(payload)
 
+    @app.delete("/api/model-config/api-key")
+    def delete_model_config_api_key():
+        return app.state.service.store.delete_model_config_api_key()
+
     @app.get("/api/model-profiles")
     def list_model_profiles():
         return ModelProfilesResponse(profiles=app.state.service.store.list_model_profiles())

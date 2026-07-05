@@ -1586,6 +1586,50 @@ def test_model_config_accepts_saved_api_key_without_leaking_plaintext(tmp_path, 
     assert secret not in str(payload)
 
 
+def test_model_config_saved_api_key_can_be_deleted(tmp_path, monkeypatch):
+    secret = "sk-live-secret-1234567890"
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    db_path = tmp_path / "agent-business.sqlite3"
+    app = create_app(db_path=db_path)
+    client = TestClient(app)
+    client.put(
+        "/api/model-config",
+        json={
+            "provider": "openai-compatible",
+            "model": "deepseek-chat",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key_env_var": "",
+            "api_key": secret,
+            "enabled": True,
+            "estimation_only": False,
+            "timeout_ms": 45000,
+            "input_price_per_million": 1.0,
+            "output_price_per_million": 2.0,
+        },
+    )
+
+    delete_response = client.delete("/api/model-config/api-key")
+
+    assert delete_response.status_code == 200
+    payload = delete_response.json()
+    assert payload["api_key_configured"] is False
+    assert payload["api_key_secret_id"] == ""
+    assert payload["api_key_masked"] == ""
+    assert secret not in str(payload)
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT api_key_ciphertext, api_key_masked FROM model_config WHERE id = 1").fetchone()
+    assert row == ("", "")
+
+    test_response = client.post("/api/model-config/test")
+
+    assert test_response.status_code == 200
+    test_payload = test_response.json()
+    assert test_payload["status"] == "failed"
+    assert test_payload["api_key_configured"] is False
+    assert secret not in str(test_payload)
+
+
 def test_model_profiles_can_be_created_updated_applied_and_deleted(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_BUSINESS_TEST_API_KEY", "secret-value-that-must-not-leak")
     app = create_app(db_path=tmp_path / "agent-business.sqlite3")

@@ -610,6 +610,24 @@ class SQLiteStore:
             )
         return config
 
+    def delete_model_config_api_key(self) -> ModelConfig:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM model_config WHERE id = 1").fetchone()
+            if row is None:
+                return self._default_model_config()
+            conn.execute(
+                """
+                UPDATE model_config
+                SET api_key_ciphertext = '', api_key_masked = '', updated_at = ?
+                WHERE id = 1
+                """,
+                (datetime.now(UTC).isoformat(),),
+            )
+            row = conn.execute("SELECT * FROM model_config WHERE id = 1").fetchone()
+        if row is None:
+            return self._default_model_config()
+        return self._model_config_from_row(row)
+
     def list_model_profiles(self) -> list[ModelProfile]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM model_profiles ORDER BY id").fetchall()

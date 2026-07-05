@@ -1,5 +1,42 @@
 # Codex Recovery Status
 
+## 7G-4A：删除当前保存 API Key（后端接口）
+### 当前真实状态
+- 后端新增 `DELETE /api/model-config/api-key`，用于清空当前全局模型配置中本地保存的真实 API Key。
+- 删除操作只清空 SQLite 里的 `api_key_ciphertext` 和 `api_key_masked`，不改变 provider、model、base_url、启用状态、价格字段。
+- 如果用户仍配置了环境变量名并且本机环境变量可用，旧环境变量兼容路径仍会继续生效；本接口只删除“本地保存的真实 Key”。
+- 删除后 `GET /api/model-config` 会返回空 `api_key_secret_id`、空 `api_key_masked`，并根据实际 Key 来源重新计算 `api_key_configured`。
+
+### 已完成
+- `SQLiteStore.delete_model_config_api_key()` 清空本地保存 Key 并返回更新后的模型配置。
+- FastAPI 增加 `DELETE /api/model-config/api-key`。
+- 后端测试覆盖：保存真实 Key、删除 Key、确认响应不泄露明文、数据库密文字段清空、测试连接变为未配置。
+
+### 未完成
+- 前端“模型 / API”面板还没有接入“删除当前 Key”按钮；下一阶段做 `7G-4B`。
+- Agent 路由和模型档案自己的本地 Key 删除接口还未做；本阶段只处理全局主模型 Key。
+
+### 风险
+- 如果用户通过环境变量提供 Key，删除本地保存 Key 后 `api_key_configured` 仍可能为 true，这是兼容旧环境变量模式的预期行为。
+- 前端按钮未接入前，只能通过 API 调用删除。
+
+### 下一步任务
+- 7G-4B：前端接入删除当前 Key 按钮和 API client 测试。
+- 7G-5：让 OrchestratorAgent 在任务创建时记录编排路由证据，并逐步接入低风险规划。
+- 7H：新增一眼看懂的系统状态 / 后端控制台。
+
+### 最近修改文件
+- `backend/app/storage.py`
+- `backend/app/main.py`
+- `backend/tests/test_api_flow.py`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`python -m pytest backend\tests\test_api_flow.py::test_model_config_saved_api_key_can_be_deleted -q` 先失败于 `DELETE /api/model-config/api-key` 返回 404。
+- 绿测：同一命令通过。
+- 相关回归：`python -m pytest backend\tests\test_api_flow.py -k "model_config" -q` 通过，7 条后端测试通过。
+- `git diff --check` 通过，仅有 Windows 行尾转换提示。
+
 ## 7G-3：总模型大脑与简历解析模型路由
 ### 当前真实状态
 - 后端 `GET /api/model-routes` 现在会返回 5 个可配置路由：`OrchestratorAgent`、`ResumeParserAgent`、`ApplicationWriterAgent`、`JobMatchAgent`、`ReviewAgent`。
