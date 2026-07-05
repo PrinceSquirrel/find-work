@@ -121,6 +121,7 @@ type BusyState = {
   refreshDetailJobId: number | null;
   manualDetailJobId: number | null;
   manualResumeText: boolean;
+  revisionTailoredResumeId: number | null;
   modelTest: boolean;
   modelRouteAgent: string | null;
   modelProfileAction: "save" | "apply" | "delete" | null;
@@ -140,6 +141,7 @@ const initialBusy: BusyState = {
   refreshDetailJobId: null,
   manualDetailJobId: null,
   manualResumeText: false,
+  revisionTailoredResumeId: null,
   modelTest: false,
   modelRouteAgent: null,
   modelProfileAction: null
@@ -184,6 +186,8 @@ function App() {
   const [modelRouteMessage, setModelRouteMessage] = useState<string | null>(null);
   const [agentEvents, setAgentEvents] = useState<Awaited<ReturnType<typeof api.getAgentEvents>> | null>(null);
   const [tailorBundles, setTailorBundles] = useState<Record<number, TailorBundle>>({});
+  const [tailoredRevisionDrafts, setTailoredRevisionDrafts] = useState<Record<number, string>>({});
+  const [tailoredRevisionMessages, setTailoredRevisionMessages] = useState<Record<number, string>>({});
   const [tailorBlockedMessages, setTailorBlockedMessages] = useState<Record<number, string>>({});
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [detailJobId, setDetailJobId] = useState<number | null>(null);
@@ -241,6 +245,11 @@ function App() {
     () => (selectedBundle ? buildTailorModelSummary(selectedBundle, usage) : null),
     [selectedBundle, usage]
   );
+  const selectedRevisionDraft = selectedBundle
+    ? tailoredRevisionDrafts[selectedBundle.id] ?? getBundleEditableText(selectedBundle)
+    : "";
+  const selectedPreviewText = selectedRevisionDraft;
+  const selectedRevisionMessage = selectedBundle ? tailoredRevisionMessages[selectedBundle.id] ?? "" : "";
   const selectedPdfTemplateStatus = useMemo(
     () => getPdfTemplateStatus(resume, Boolean(selectedBundle), pdfStatusMessage),
     [pdfStatusMessage, resume, selectedBundle]
@@ -722,6 +731,8 @@ function App() {
     setSelectedJobId(null);
     setDetailJobId(null);
     setTailorBundles({});
+    setTailoredRevisionDrafts({});
+    setTailoredRevisionMessages({});
     setTailorBlockedMessages({});
     setManualDetailDrafts({});
     setManualDetailNotes({});
@@ -895,6 +906,9 @@ function App() {
     try {
       const bundle = await api.tailorJob(job.id, resume.id);
       setTailorBundles((current) => ({ ...current, [job.id]: bundle }));
+      const editableText = getBundleEditableText(bundle);
+      setTailoredRevisionDrafts((current) => ({ ...current, [bundle.id]: editableText }));
+      setTailoredRevisionMessages((current) => ({ ...current, [bundle.id]: "已生成初始可编辑版本。" }));
       setSelectedJobId(job.id);
       await refreshOutcomeData();
     } catch (nextError) {
@@ -908,6 +922,44 @@ function App() {
       }
     } finally {
       setBusy((current) => ({ ...current, tailorJobId: null }));
+    }
+  }
+
+  async function handleSaveTailoredRevision(bundle: TailorBundle) {
+    const draft = (tailoredRevisionDrafts[bundle.id] ?? getBundleEditableText(bundle)).trim();
+    if (!draft) {
+      setError("简历改写正文不能为空。");
+      return;
+    }
+    setBusy((current) => ({ ...current, revisionTailoredResumeId: bundle.id }));
+    setError(null);
+    try {
+      const saved = await api.updateTailoredResumeRevision(bundle.id, draft);
+      const preview = await api.getTailoredResumePreview(bundle.id);
+      setTailorBundles((current) => {
+        const entry = Object.entries(current).find(([, item]) => item.id === bundle.id);
+        if (!entry) {
+          return current;
+        }
+        const [jobId, currentBundle] = entry;
+        return {
+          ...current,
+          [Number(jobId)]: {
+            ...currentBundle,
+            resume_text: saved.editable_text,
+            resume_rewrite: saved.editable_text,
+            project_rewrite: saved.editable_text
+          }
+        };
+      });
+      setTailoredRevisionDrafts((current) => ({ ...current, [bundle.id]: preview.plain_text || saved.editable_text }));
+      setTailoredRevisionMessages((current) => ({ ...current, [bundle.id]: "已保存，PDF 下载将使用这版简历。" }));
+      setPdfStatusMessage("模板化 PDF：已保存最新编辑，下载将使用此版本。");
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+      setTailoredRevisionMessages((current) => ({ ...current, [bundle.id]: "保存失败，请检查后端服务。" }));
+    } finally {
+      setBusy((current) => ({ ...current, revisionTailoredResumeId: null }));
     }
   }
 
@@ -1906,8 +1958,40 @@ function App() {
                     </div>
                   </div>
                   <section>
-                    <h3>简历改写要求</h3>
-                    <pre>{selectedBundle.resume_rewrite || selectedBundle.project_rewrite || selectedBundle.resume_text}</pre>
+                    <h3>在线编辑 / 预览</h3>
+                    <div className="source-banner">
+                      <b>修改后的简历正文</b>
+                      <span>可直接编辑并实时预览；保存后 PDF 下载会使用保存后的版本。</span>
+                    </div>
+                    <div className="search-form">
+                      <div>
+                        <label>
+                          <span>简历改写正文</span>
+                          <textarea
+                            rows={10}
+                            value={selectedRevisionDraft}
+                            onChange={(event) =>
+                              setTailoredRevisionDrafts((current) => ({
+                                ...current,
+                                [selectedBundle.id]: event.target.value
+                              }))
+                            }
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          disabled={busy.revisionTailoredResumeId === selectedBundle.id}
+                          onClick={() => void handleSaveTailoredRevision(selectedBundle)}
+                        >
+                          {busy.revisionTailoredResumeId === selectedBundle.id ? "保存中..." : "保存编辑版本"}
+                        </button>
+                        {selectedRevisionMessage ? <small>{selectedRevisionMessage}</small> : null}
+                      </div>
+                      <div>
+                        <b>实时预览</b>
+                        <pre>{selectedPreviewText}</pre>
+                      </div>
+                    </div>
                   </section>
                   <section>
                     <h3>招呼语</h3>
@@ -2633,6 +2717,10 @@ function getProfileStringArray(profile: Record<string, unknown>, key: string): s
 function getProfileString(profile: Record<string, unknown>, key: string): string {
   const value = profile[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function getBundleEditableText(bundle: TailorBundle): string {
+  return bundle.resume_rewrite || bundle.project_rewrite || bundle.resume_text || "";
 }
 
 function toErrorMessage(error: unknown): string {

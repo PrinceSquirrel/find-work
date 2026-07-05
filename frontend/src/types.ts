@@ -109,6 +109,23 @@ export interface TailorBundle extends TailoredResume {
   review: Record<string, unknown>;
 }
 
+export interface TailoredResumeRevision {
+  id: number;
+  job_id: number;
+  resume_id: number;
+  editable_text: string;
+  resume_rewrite: string;
+  project_rewrite: string;
+  resume_text: string;
+  created_at: string;
+}
+
+export interface TailoredResumePreview {
+  id: number;
+  plain_text: string;
+  html: string;
+}
+
 export interface ApplicationEvent {
   id: number | null;
   application_id: number | null;

@@ -23,6 +23,8 @@ import type {
   ResumeDraft,
   SearchRun,
   SearchRunRequest,
+  TailoredResumePreview,
+  TailoredResumeRevision,
   TailorBundle
 } from "../types";
 import type { BackendAgentEventsSnapshot } from "./dashboard";
@@ -150,6 +152,21 @@ export const api = {
 
   tailoredResumePdfUrl(tailoredResumeId: number): string {
     return `${API_BASE_URL}/api/tailored-resumes/${encodeURIComponent(tailoredResumeId)}/pdf`;
+  },
+
+  getTailoredResumeRevision(tailoredResumeId: number): Promise<TailoredResumeRevision> {
+    return request<TailoredResumeRevision>(`/api/tailored-resumes/${encodeURIComponent(tailoredResumeId)}/revision`);
+  },
+
+  updateTailoredResumeRevision(tailoredResumeId: number, resumeRewrite: string): Promise<TailoredResumeRevision> {
+    return request<TailoredResumeRevision>(`/api/tailored-resumes/${encodeURIComponent(tailoredResumeId)}/revision`, {
+      method: "PATCH",
+      body: JSON.stringify({ resume_rewrite: resumeRewrite })
+    });
+  },
+
+  getTailoredResumePreview(tailoredResumeId: number): Promise<TailoredResumePreview> {
+    return request<TailoredResumePreview>(`/api/tailored-resumes/${encodeURIComponent(tailoredResumeId)}/preview`);
   },
 
   createApplyRecord(jobId: number, note: string): Promise<ApplicationRecord> {

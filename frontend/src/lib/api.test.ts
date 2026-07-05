@@ -410,6 +410,64 @@ describe("api client", () => {
     );
   });
 
+  test("tailored resume revision endpoints support read, save, and preview", async () => {
+    const revisionPayload = {
+      id: 9,
+      job_id: 3,
+      resume_id: 12,
+      editable_text: "初始简历改写",
+      resume_rewrite: "初始简历改写",
+      project_rewrite: "初始简历改写",
+      resume_text: "初始简历改写",
+      created_at: "2026-07-05T12:00:00Z"
+    };
+    const previewPayload = {
+      id: 9,
+      plain_text: "保存后的简历改写",
+      html: "<article>保存后的简历改写</article>"
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => revisionPayload
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ...revisionPayload, editable_text: "保存后的简历改写" })
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => previewPayload
+      } as Response);
+
+    const revision = await api.getTailoredResumeRevision(9);
+    const saved = await api.updateTailoredResumeRevision(9, "保存后的简历改写");
+    const preview = await api.getTailoredResumePreview(9);
+
+    expect(revision.editable_text).toBe("初始简历改写");
+    expect(saved.editable_text).toBe("保存后的简历改写");
+    expect(preview.html).toContain("保存后的简历改写");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/tailored-resumes/9/revision",
+      expect.objectContaining({ headers: expect.objectContaining({ "Content-Type": "application/json" }) })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/tailored-resumes/9/revision",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ resume_rewrite: "保存后的简历改写" })
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/tailored-resumes/9/preview",
+      expect.objectContaining({ headers: expect.objectContaining({ "Content-Type": "application/json" }) })
+    );
+  });
+
   test("searchPlatformJobs sends keywords and city to the CDP search endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

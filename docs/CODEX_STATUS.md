@@ -1,5 +1,48 @@
 # Codex Recovery Status
 
+## 7F-2：前端定制简历在线编辑与实时预览
+### 当前真实状态
+- 人审材料区现在把“简历改写要求”升级为“在线编辑 / 预览”。
+- 用户可以直接在 textarea 中修改定制简历正文，右侧/下方预览会跟随输入实时变化。
+- 点击“保存编辑版本”会调用 `PATCH /api/tailored-resumes/{id}/revision` 保存当前编辑内容。
+- 保存成功后会调用 `GET /api/tailored-resumes/{id}/preview` 回填后端预览文本，并更新当前 `TailorBundle` 的 `resume_text/resume_rewrite/project_rewrite`。
+- PDF 下载入口保持不变，但保存后的编辑版本会进入后端 revision，因此下载会使用最新版本。
+
+### 已完成
+- 前端 API client 新增 `getTailoredResumeRevision()`、`updateTailoredResumeRevision()`、`getTailoredResumePreview()`。
+- 新增 `TailoredResumeRevision` 和 `TailoredResumePreview` 类型。
+- 人审材料区新增可编辑正文、实时预览、保存状态提示。
+- 前端 API 单测覆盖 revision 读取、保存和 preview endpoint。
+
+### 未完成
+- 当前没有单独的 React 组件测试；本阶段用 API 单测、TypeScript build 和 lint 验证。
+- preview 仍是文本级预览，不是最终 DOCX/PDF 版式预览。
+- 暂未提供“恢复 AI 原始版本”或 revision 历史版本。
+
+### 风险
+- 前端保存后会把当前页面里的材料文本同步为编辑版本；如果用户想保留 AI 初稿，需要后续加历史版本或恢复按钮。
+- PDF 最终版式仍受 DOCX 模板和本机 Word/LibreOffice 转换能力影响。
+
+### 下一步任务
+- 7G：简化模型/API 设置，支持真实 Key 本地加密保存、隐藏、测试和删除。
+- 7H：新增一眼看懂的后端操作页。
+
+### 最近修改文件
+- `frontend/src/types.ts`
+- `frontend/src/lib/api.ts`
+- `frontend/src/lib/api.test.ts`
+- `frontend/src/App.tsx`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`npm test -- --run src/lib/api.test.ts -t "tailored resume revision"` 先失败于 `api.getTailoredResumeRevision is not a function`。
+- 绿测：同一命令通过。
+- `npm test -- --run src/lib/api.test.ts` 通过，15 条前端 API 单测通过。
+- `npm run build` 通过。
+- `npm run lint` 通过。
+- `python -m pytest backend\tests\test_api_flow.py::test_tailored_resume_revision_can_be_edited_previewed_and_used_for_pdf -q` 通过。
+- `git diff --check` 通过，仅有 Windows 行尾转换提示。
+
 ## 7F-1：定制简历在线编辑 Revision/Preview 后端
 ### 当前真实状态
 - 后端新增 `GET /api/tailored-resumes/{id}/revision`，可以读取当前可编辑简历正文。
