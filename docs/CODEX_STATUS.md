@@ -1,5 +1,47 @@
 # Codex Recovery Status
 
+## 7G-3：总模型大脑与简历解析模型路由
+### 当前真实状态
+- 后端 `GET /api/model-routes` 现在会返回 5 个可配置路由：`OrchestratorAgent`、`ResumeParserAgent`、`ApplicationWriterAgent`、`JobMatchAgent`、`ReviewAgent`。
+- `PUT /api/model-routes/OrchestratorAgent` 和 `PUT /api/model-routes/ResumeParserAgent` 可以保存独立 provider、model、base_url、真实 Key/环境变量兼容配置、启用状态和价格字段。
+- `OrchestratorAgent` 默认继承当前主模型配置，符合“总模型大脑”的使用预期。
+- `ResumeParserAgent` 默认仍是本地规则；用户显式套用模型档案后可以保存外部模型路由。
+- 前端高级路由表新增中文标签：“总模型大脑”“简历解析”，页面会显示总模型、简历解析、简历/招呼语生成、岗位匹配评分、事实风险审核。
+
+### 已完成
+- `MODEL_ROUTE_AGENTS` 加入 `OrchestratorAgent` 和 `ResumeParserAgent`。
+- 默认 Agent 路由顺序调整为：总模型大脑、简历解析、简历/招呼语生成、岗位匹配评分、事实风险审核。
+- 后端测试覆盖新 Agent 路由的默认返回和保存能力。
+- 前端模型路由标签补齐，用户不再看到裸英文 Agent 名称作为主要说明。
+
+### 未完成
+- `OrchestratorAgent` 目前只是可配置路由，尚未真正调用外部模型做任务规划或 Agent 编排决策。
+- `ResumeParserAgent` 仍优先规则解析/OCR/手动补全，尚未调用模型做复杂简历结构化。
+- 高级路由表仍只能套用已保存模型档案，不能在每个 Agent 行内直接粘贴不同 API Key。
+
+### 风险
+- 如果用户为 `ResumeParserAgent` 启用外部模型，当前解析链路仍不会消耗该路由；这属于后续接入任务。
+- `OrchestratorAgent` 默认继承主模型配置，但实际运行时暂未记录独立 token/cost。
+
+### 下一步任务
+- 7G-4：补“删除当前保存 API Key”的后端接口和前端按钮。
+- 7G-5：让 OrchestratorAgent 在任务创建时记录编排路由证据，并逐步接入低风险规划。
+- 7H：新增一眼看懂的系统状态 / 后端控制台。
+
+### 最近修改文件
+- `backend/app/storage.py`
+- `backend/tests/test_api_flow.py`
+- `frontend/src/App.tsx`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`python -m pytest backend\tests\test_api_flow.py::test_agent_model_routes_can_be_saved_per_agent -q` 先失败于路由列表缺少 `OrchestratorAgent` 和 `ResumeParserAgent`。
+- 绿测：同一命令通过。
+- 相关回归：`python -m pytest backend\tests\test_api_flow.py -k "model_route or model_profiles or model_config" -q` 通过，12 条后端测试通过。
+- `npm run lint` 通过。
+- `npm run build` 通过。
+- `git diff --check` 通过，仅有 Windows 行尾转换提示。
+
 ## 7G-2：前端简化模型/API 面板
 ### 当前真实状态
 - “模型 / API”面板已从复杂的 Model Picker、环境变量名、模型档案表单和完整 Agent 路由表单，收敛成简单模式。

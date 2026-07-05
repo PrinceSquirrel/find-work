@@ -1665,8 +1665,42 @@ def test_agent_model_routes_can_be_saved_per_agent(tmp_path, monkeypatch):
 
     assert default_response.status_code == 200
     default_routes = {route["agent_name"]: route for route in default_response.json()["routes"]}
-    assert {"ApplicationWriterAgent", "JobMatchAgent", "ReviewAgent"}.issubset(default_routes)
+    assert {
+        "OrchestratorAgent",
+        "ResumeParserAgent",
+        "ApplicationWriterAgent",
+        "JobMatchAgent",
+        "ReviewAgent",
+    }.issubset(default_routes)
 
+    orchestrator_response = client.put(
+        "/api/model-routes/OrchestratorAgent",
+        json={
+            "provider": "openai-compatible",
+            "model": "v4pro",
+            "base_url": "https://api.deepseek.com",
+            "api_key_env_var": "AGENT_BUSINESS_TEST_API_KEY",
+            "enabled": True,
+            "estimation_only": False,
+            "timeout_ms": 90000,
+            "input_price_per_million": 1.0,
+            "output_price_per_million": 2.0,
+        },
+    )
+    parser_response = client.put(
+        "/api/model-routes/ResumeParserAgent",
+        json={
+            "provider": "openai-compatible",
+            "model": "v4flash",
+            "base_url": "https://api.deepseek.com",
+            "api_key_env_var": "AGENT_BUSINESS_TEST_API_KEY",
+            "enabled": True,
+            "estimation_only": False,
+            "timeout_ms": 45000,
+            "input_price_per_million": 0.5,
+            "output_price_per_million": 1.0,
+        },
+    )
     writer_response = client.put(
         "/api/model-routes/ApplicationWriterAgent",
         json={
@@ -1710,13 +1744,19 @@ def test_agent_model_routes_can_be_saved_per_agent(tmp_path, monkeypatch):
         },
     )
 
+    assert orchestrator_response.status_code == 200
+    assert parser_response.status_code == 200
     assert writer_response.status_code == 200
     assert matcher_response.status_code == 200
     assert review_response.status_code == 200
     saved = {route["agent_name"]: route for route in client.get("/api/model-routes").json()["routes"]}
+    assert saved["OrchestratorAgent"]["model"] == "deepseek-v4-pro"
+    assert saved["ResumeParserAgent"]["model"] == "deepseek-v4-flash"
     assert saved["ApplicationWriterAgent"]["model"] == "deepseek-v4-pro"
     assert saved["JobMatchAgent"]["model"] == "deepseek-v4-flash"
     assert saved["ReviewAgent"]["model"] == "deepseek-v4-pro"
+    assert saved["OrchestratorAgent"]["api_key_configured"] is True
+    assert saved["ResumeParserAgent"]["api_key_configured"] is True
     assert saved["ApplicationWriterAgent"]["api_key_configured"] is True
     assert saved["JobMatchAgent"]["api_key_configured"] is True
     assert saved["ReviewAgent"]["api_key_configured"] is True

@@ -34,7 +34,13 @@ from app.schemas import (
     TailoredResume,
 )
 
-MODEL_ROUTE_AGENTS = ("ApplicationWriterAgent", "JobMatchAgent", "ReviewAgent")
+MODEL_ROUTE_AGENTS = (
+    "OrchestratorAgent",
+    "ResumeParserAgent",
+    "ApplicationWriterAgent",
+    "JobMatchAgent",
+    "ReviewAgent",
+)
 
 
 class SQLiteStore:
@@ -1462,7 +1468,7 @@ class SQLiteStore:
 
     def _default_agent_model_route(self, agent_name: str) -> AgentModelRoute:
         self._validate_model_route_agent(agent_name)
-        if agent_name == "ApplicationWriterAgent":
+        if agent_name in {"OrchestratorAgent", "ApplicationWriterAgent"}:
             config = self.get_model_config()
             payload = config.model_dump()
             payload["api_key"] = config.api_key

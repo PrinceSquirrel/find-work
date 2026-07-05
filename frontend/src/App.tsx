@@ -114,6 +114,8 @@ const MODEL_VERSION_OPTIONS = [
 ];
 
 const MODEL_ROUTE_AGENT_LABELS: Record<string, string> = {
+  OrchestratorAgent: "总模型大脑",
+  ResumeParserAgent: "简历解析",
   ApplicationWriterAgent: "简历/招呼语生成",
   JobMatchAgent: "岗位匹配评分",
   ReviewAgent: "事实风险审核"
