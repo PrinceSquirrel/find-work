@@ -22,6 +22,7 @@ import {
   rankJobs,
   shouldShowTailorRetryAction,
   summarizePlatformConfirmation,
+  summarizeSystemHealth,
   summarizeUsage
 } from "./lib/dashboard";
 import type {
@@ -224,6 +225,7 @@ function App() {
   const [modelRouteProfileSelections, setModelRouteProfileSelections] = useState<Record<string, number | "">>({});
   const [modelRouteMessage, setModelRouteMessage] = useState<string | null>(null);
   const [systemHealth, setSystemHealth] = useState<SystemHealthResponse | null>(null);
+  const [recentSystemHealthError, setRecentSystemHealthError] = useState<string | null>(null);
   const [agentEvents, setAgentEvents] = useState<Awaited<ReturnType<typeof api.getAgentEvents>> | null>(null);
   const [tailorBundles, setTailorBundles] = useState<Record<number, TailorBundle>>({});
   const [tailoredRevisionDrafts, setTailoredRevisionDrafts] = useState<Record<number, string>>({});
@@ -361,6 +363,10 @@ function App() {
     () => buildModelRouteApplyOptions(modelRoutes, selectedModelProfile, MODEL_ROUTE_AGENT_LABELS),
     [modelRoutes, selectedModelProfile]
   );
+  const systemHealthSummary = useMemo(
+    () => summarizeSystemHealth(systemHealth, recentSystemHealthError),
+    [recentSystemHealthError, systemHealth]
+  );
 
   async function refreshWorkspace() {
     setBusy((current) => ({ ...current, boot: true }));
@@ -416,6 +422,7 @@ function App() {
       setModelRoutes(nextModelRoutes.routes);
       setModelProfiles(nextModelProfiles.profiles);
       setSystemHealth(nextSystemHealth);
+      setRecentSystemHealthError(null);
       setModelRouteDrafts(Object.fromEntries(nextModelRoutes.routes.map((route) => [route.agent_name, toModelConfigUpdate(route)])));
       setModelRouteProfileSelections((current) => {
         const fallbackProfileId = nextModelProfiles.profiles[0]?.id ?? "";
@@ -466,8 +473,11 @@ function App() {
     setError(null);
     try {
       setSystemHealth(await api.getSystemHealth());
+      setRecentSystemHealthError(null);
     } catch (nextError) {
-      setError(toErrorMessage(nextError));
+      const message = toErrorMessage(nextError);
+      setRecentSystemHealthError(message);
+      setError(message);
     } finally {
       setBusy((current) => ({ ...current, systemHealth: false }));
     }
@@ -1219,16 +1229,18 @@ function App() {
       ) : null}
 
       <Panel title="系统状态 / 后端控制台" kicker="System Health">
-        <div className="model-simple-card">
+        <div className={`system-health-headline tone-${systemHealthSummary.tone}`}>
           <div>
             <span>总体状态</span>
-            <b>{systemHealth ? systemHealthStatusLabel(systemHealth.status) : busy.boot ? "读取中" : "未读取"}</b>
-            <small>{systemHealth ? `更新时间：${formatDateTime(systemHealth.generated_at)}` : "点击刷新状态读取后端诊断"}</small>
+            <b>{busy.systemHealth ? "刷新中" : systemHealthSummary.overallLabel}</b>
+            <small>
+              {systemHealth ? `更新时间：${systemHealthSummary.generatedLabel}` : systemHealthSummary.nextActionLabel}
+            </small>
           </div>
           <div>
-            <span>下一步</span>
-            <b>{systemHealth?.checks.find((check) => check.status !== "green")?.label ?? "核心状态正常"}</b>
-            <small>{systemHealth?.checks.find((check) => check.status !== "green")?.next_action ?? "可以继续搜索岗位或生成材料"}</small>
+            <span>优先处理</span>
+            <b>{systemHealthSummary.primaryCheck?.label ?? "核心状态正常"}</b>
+            <small>{systemHealthSummary.nextActionLabel}</small>
           </div>
         </div>
         <div className="session-toolbar">
@@ -1245,14 +1257,20 @@ function App() {
             {busy.sessions ? "刷新中" : "刷新平台会话"}
           </button>
         </div>
+        {systemHealthSummary.recentError ? (
+          <div className="system-health-error" role="status">
+            <b>最近错误</b>
+            <span>{systemHealthSummary.recentError}</span>
+          </div>
+        ) : null}
         <div className="platform-session-grid">
           {systemHealth ? (
-            systemHealth.checks.map((check) => (
-              <div className={`platform-session state-${check.status}`} key={check.id}>
+            systemHealthSummary.cards.map((check) => (
+              <div className={`system-health-card tone-${check.tone}`} key={check.id}>
                 <b>{check.label}</b>
-                <span>{systemHealthStatusLabel(check.status)}</span>
+                <span>{check.statusLabel}</span>
                 <small>{check.summary}</small>
-                {check.next_action ? <small>{check.next_action}</small> : null}
+                {check.nextAction ? <small>{check.nextAction}</small> : null}
               </div>
             ))
           ) : (
@@ -2506,15 +2524,6 @@ function platformSessionLabel(state: string): string {
     cdp_unreachable: "CDP 不可达"
   };
   return labels[state] ?? state;
-}
-
-function systemHealthStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    green: "正常",
-    yellow: "需要处理",
-    red: "异常"
-  };
-  return labels[status] ?? status;
 }
 
 function formatSelectorCounts(counts: Record<string, number>): string[] {

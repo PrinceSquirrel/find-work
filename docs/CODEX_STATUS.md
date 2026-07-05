@@ -1,5 +1,46 @@
 # Codex Recovery Status
 
+## 7H-2B：系统状态控制台视觉与局部错误
+### 当前真实状态
+- 前端系统状态控制台从普通信息块升级为绿/黄/红状态面板。
+- 控制台顶部显示总体状态、更新时间、优先处理项和下一步操作。
+- 每张状态卡使用统一的 `success / warning / danger / muted` 视觉语义，不再在页面组件里散落状态判断。
+- 刷新系统状态失败时，除全局错误外，控制台内部会显示“最近错误”，方便用户知道是后端状态读取失败，而不是岗位或简历流程失败。
+
+### 已完成
+- 新增 `summarizeSystemHealth()` 前端 helper，把 `/api/system/health` 响应整理成可渲染摘要和状态卡。
+- 新增单元测试覆盖健康摘要、优先处理项、最近错误和卡片状态映射。
+- `App.tsx` 接入健康摘要，渲染更清楚的控制台头部、局部错误和状态卡。
+- 新增系统健康卡片样式，并补充窄屏响应式布局。
+
+### 未完成
+- “检查 PDF/OCR”仍复用状态刷新展示依赖可用性，还没有单独的专项检查按钮。
+- 最近错误目前只记录系统状态刷新失败；模型测试、CDP 启动等操作仍使用各自原有提示。
+- 还没有浏览器截图验收，只完成了前端测试、类型检查和构建。
+
+### 风险
+- 当前改动只打磨控制台首屏，不改变后端健康检测逻辑。
+- 如果后端未启动，页面仍会同时出现全局错误和控制台局部错误，这是为了让用户在顶部和控制台内都能看到失败原因。
+
+### 下一步任务
+- 7H-2C：把“测试模型 / 启动 CDP / 刷新平台会话”后的健康状态自动刷新，并增加更直观的操作成功/失败提示。
+- 后续继续推进 OrchestratorAgent 低风险规划、RAG、Skill Registry 和 MCP Gateway。
+
+### 最近修改文件
+- `frontend/src/lib/dashboard.ts`
+- `frontend/src/lib/dashboard.test.ts`
+- `frontend/src/App.tsx`
+- `frontend/src/styles.css`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`npm test -- --run src/lib/dashboard.test.ts -t "system health"` 先失败于 `summarizeSystemHealth is not a function`。
+- 目标测试：`npm test -- --run src/lib/dashboard.test.ts -t "system health"` 通过。
+- 前端 dashboard 测试：`npm test -- --run src/lib/dashboard.test.ts` 通过，23 条测试通过。
+- 前端全量测试：`npm test -- --run` 通过，41 条测试通过。
+- 类型检查：`npm run lint` 通过。
+- 前端构建：`npm run build` 通过。
+
 ## 7H-2A：前端系统状态 / 后端控制台首屏
 ### 当前真实状态
 - 前端已接入 `GET /api/system/health`，页面顶部会显示“系统状态 / 后端控制台”区域。

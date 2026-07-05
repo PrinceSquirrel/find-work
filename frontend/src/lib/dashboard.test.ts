@@ -14,6 +14,7 @@ import {
   filterJobsForActiveSearchRun,
   getJobDetailQuality,
   shouldShowTailorRetryAction,
+  summarizeSystemHealth,
   buildOrchestratorSummary,
   getAllowedNextStatuses,
   getRatePercent,
@@ -22,7 +23,14 @@ import {
   summarizePlatformConfirmation,
   summarizeUsage
 } from "./dashboard";
-import type { AgentModelRoute, AnalyticsBucket, JobPosting, LLMUsageSummary, ModelProfile } from "../types";
+import type {
+  AgentModelRoute,
+  AnalyticsBucket,
+  JobPosting,
+  LLMUsageSummary,
+  ModelProfile,
+  SystemHealthResponse
+} from "../types";
 
 const jobs: JobPosting[] = [
   {
@@ -130,6 +138,55 @@ const modelRoutes: AgentModelRoute[] = [
 ];
 
 describe("dashboard helpers", () => {
+  it("summarizes system health into clear status cards and the next action", () => {
+    const health: SystemHealthResponse = {
+      status: "yellow",
+      generated_at: "2026-07-06T12:00:00Z",
+      checks: [
+        {
+          id: "backend",
+          label: "Backend",
+          status: "green",
+          summary: "API is running",
+          detail: "FastAPI responded",
+          next_action: "",
+          metadata: {}
+        },
+        {
+          id: "model",
+          label: "Model",
+          status: "red",
+          summary: "No API key",
+          detail: "Saved model key is missing",
+          next_action: "Save a model key",
+          metadata: {}
+        },
+        {
+          id: "ocr",
+          label: "OCR",
+          status: "yellow",
+          summary: "OCR is unavailable",
+          detail: "Manual text is still supported",
+          next_action: "Install OCR if needed",
+          metadata: {}
+        }
+      ]
+    };
+
+    const summary = summarizeSystemHealth(health, "Model connection failed");
+
+    expect(summary.overallLabel).toBe("需要处理");
+    expect(summary.tone).toBe("warning");
+    expect(summary.primaryCheck?.id).toBe("model");
+    expect(summary.nextActionLabel).toBe("Save a model key");
+    expect(summary.recentError).toBe("Model connection failed");
+    expect(summary.cards).toEqual([
+      expect.objectContaining({ id: "backend", tone: "success", statusLabel: "正常" }),
+      expect.objectContaining({ id: "model", tone: "danger", statusLabel: "异常" }),
+      expect.objectContaining({ id: "ocr", tone: "warning", statusLabel: "需处理" })
+    ]);
+  });
+
   it("ranks and filters jobs by platform, keyword, and minimum score", () => {
     const ranked = rankJobs(jobs, {
       platform: "boss",

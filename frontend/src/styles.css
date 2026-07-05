@@ -408,6 +408,94 @@ label span,
   border-color: #e2bd7a;
 }
 
+.system-health-headline {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+  padding: 12px;
+}
+
+.system-health-headline > div {
+  display: grid;
+  gap: 4px;
+}
+
+.system-health-headline span,
+.system-health-card small,
+.system-health-error span {
+  color: var(--muted);
+}
+
+.system-health-headline b {
+  font-family: "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  font-size: 22px;
+}
+
+.system-health-card {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 5px;
+  min-height: 118px;
+  padding: 12px;
+}
+
+.system-health-card span {
+  width: fit-content;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 2px 9px;
+}
+
+.system-health-headline.tone-success,
+.system-health-card.tone-success {
+  background: var(--green-soft);
+  border-color: #acd3c8;
+}
+
+.system-health-headline.tone-warning,
+.system-health-card.tone-warning {
+  background: var(--amber-soft);
+  border-color: #ddb269;
+}
+
+.system-health-headline.tone-danger,
+.system-health-card.tone-danger,
+.system-health-error {
+  background: var(--red-soft);
+  border-color: #d29b92;
+}
+
+.system-health-headline.tone-muted,
+.system-health-card.tone-muted {
+  background: #fffdf7;
+}
+
+.system-health-card.tone-success span {
+  background: rgba(40, 111, 98, 0.14);
+  color: var(--green-deep);
+}
+
+.system-health-card.tone-warning span {
+  background: rgba(184, 117, 37, 0.16);
+  color: #6f4210;
+}
+
+.system-health-card.tone-danger span {
+  background: rgba(167, 71, 56, 0.14);
+  color: var(--red);
+}
+
+.system-health-error {
+  border: 1px solid #d29b92;
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px 12px;
+}
+
 .extraction-block {
   border: 1px solid var(--line);
   background: #fffdf7;
@@ -1510,6 +1598,7 @@ pre {
   .search-form,
   .toolbar,
   .split-list,
+  .system-health-headline,
   .model-simple-card,
   .model-simple-form,
   .model-simple-actions,

@@ -9,6 +9,8 @@ import type {
   LLMUsageSummary,
   ModelProfile,
   ResumeDraft,
+  SystemHealthCheck,
+  SystemHealthResponse,
   TailorBundle,
   UsageCards
 } from "../types";
@@ -177,6 +179,26 @@ export interface ModelRouteApplyOption {
   canApply: boolean;
 }
 
+export interface SystemHealthCardView {
+  id: string;
+  label: string;
+  statusLabel: string;
+  tone: StatusTone;
+  summary: string;
+  detail: string;
+  nextAction: string;
+}
+
+export interface SystemHealthSummaryView {
+  overallLabel: string;
+  tone: StatusTone;
+  generatedLabel: string;
+  nextActionLabel: string;
+  primaryCheck: SystemHealthCardView | null;
+  recentError: string;
+  cards: SystemHealthCardView[];
+}
+
 const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
   discovered: [],
   matched: [],
@@ -254,6 +276,87 @@ export function buildModelRouteApplyOptions(
       : "请选择模型档案",
     canApply: Boolean(selectedProfile)
   }));
+}
+
+export function summarizeSystemHealth(
+  health: SystemHealthResponse | null,
+  recentError: string | null = null
+): SystemHealthSummaryView {
+  if (!health) {
+    return {
+      overallLabel: "未读取",
+      tone: "muted",
+      generatedLabel: "-",
+      nextActionLabel: "刷新状态读取后端诊断",
+      primaryCheck: null,
+      recentError: recentError?.trim() ?? "",
+      cards: []
+    };
+  }
+
+  const cards = health.checks.map(toSystemHealthCard);
+  const primaryCheck = cards.find((card) => card.tone === "danger") ?? cards.find((card) => card.tone === "warning") ?? null;
+
+  return {
+    overallLabel: getSystemHealthOverallLabel(health.status),
+    tone: getSystemHealthTone(health.status),
+    generatedLabel: formatDateTime(health.generated_at),
+    nextActionLabel: primaryCheck?.nextAction || "可以继续搜索岗位或生成材料",
+    primaryCheck,
+    recentError: recentError?.trim() ?? "",
+    cards
+  };
+}
+
+function toSystemHealthCard(check: SystemHealthCheck): SystemHealthCardView {
+  return {
+    id: check.id,
+    label: check.label,
+    statusLabel: getSystemHealthStatusLabel(check.status),
+    tone: getSystemHealthTone(check.status),
+    summary: check.summary,
+    detail: check.detail,
+    nextAction: check.next_action
+  };
+}
+
+function getSystemHealthTone(status: string): StatusTone {
+  if (status === "green") {
+    return "success";
+  }
+  if (status === "yellow") {
+    return "warning";
+  }
+  if (status === "red") {
+    return "danger";
+  }
+  return "muted";
+}
+
+function getSystemHealthStatusLabel(status: string): string {
+  if (status === "green") {
+    return "正常";
+  }
+  if (status === "yellow") {
+    return "需处理";
+  }
+  if (status === "red") {
+    return "异常";
+  }
+  return "未知";
+}
+
+function getSystemHealthOverallLabel(status: string): string {
+  if (status === "green") {
+    return "可用";
+  }
+  if (status === "yellow") {
+    return "需要处理";
+  }
+  if (status === "red") {
+    return "不可用";
+  }
+  return "未知";
 }
 
 export function rankJobs(jobs: JobPosting[], filters: JobFilters): JobPosting[] {
