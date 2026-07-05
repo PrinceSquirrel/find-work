@@ -102,9 +102,21 @@ const DEEPSEEK_FLASH_MODEL_PRESET: ModelConfigUpdate = {
   output_price_per_million: 1
 };
 
+const MODEL_PROVIDER_OPTIONS = [
+  { value: "openai-compatible", label: "DeepSeek / OpenAI 兼容" },
+  { value: "local", label: "本地规则 / 不调用模型" }
+];
+
+const MODEL_VERSION_OPTIONS = [
+  { value: "deepseek-v4-pro", label: "DeepSeek v4 Pro" },
+  { value: "deepseek-v4-flash", label: "DeepSeek v4 Flash" },
+  { value: "deepseek-chat", label: "DeepSeek Chat" }
+];
+
 const MODEL_ROUTE_AGENT_LABELS: Record<string, string> = {
   ApplicationWriterAgent: "简历/招呼语生成",
-  JobMatchAgent: "岗位匹配评分"
+  JobMatchAgent: "岗位匹配评分",
+  ReviewAgent: "事实风险审核"
 };
 
 type BusyState = {
@@ -165,6 +177,24 @@ function toModelConfigUpdate(config: ModelConfig): ModelConfigUpdate {
   };
 }
 
+function keyStatusText(config: Pick<ModelConfig, "api_key_configured" | "api_key_masked" | "api_key_env_var"> | null): string {
+  if (!config) {
+    return "未读取";
+  }
+  if (config.api_key_configured) {
+    return config.api_key_masked ? `已保存 ${config.api_key_masked}` : "Key 已配置";
+  }
+  return config.api_key_env_var ? `等待 ${config.api_key_env_var}` : "未配置";
+}
+
+function withModelApiKey(draft: ModelConfigUpdate, apiKey: string): ModelConfigUpdate {
+  return {
+    ...draft,
+    api_key_env_var: "",
+    api_key: apiKey.trim()
+  };
+}
+
 function App() {
   const [resume, setResume] = useState<ResumeDraft | null>(null);
   const [jobs, setJobs] = useState<JobPosting[]>([]);
@@ -180,6 +210,8 @@ function App() {
   const [isModelManagerOpen, setIsModelManagerOpen] = useState(false);
   const [modelMessage, setModelMessage] = useState<string | null>(null);
   const [modelTestResult, setModelTestResult] = useState<ModelConfigTestResult | null>(null);
+  const [modelApiKey, setModelApiKey] = useState("");
+  const [showModelApiKey, setShowModelApiKey] = useState(false);
   const [modelRoutes, setModelRoutes] = useState<AgentModelRoute[]>([]);
   const [modelRouteDrafts, setModelRouteDrafts] = useState<Record<string, ModelConfigUpdate>>({});
   const [modelRouteProfileSelections, setModelRouteProfileSelections] = useState<Record<string, number | "">>({});
@@ -384,13 +416,14 @@ function App() {
         provider: nextModelConfig.provider || DEEPSEEK_MODEL_PRESET.provider,
         model: nextModelConfig.model || DEEPSEEK_MODEL_PRESET.model,
         base_url: nextModelConfig.base_url || DEEPSEEK_MODEL_PRESET.base_url,
-        api_key_env_var: nextModelConfig.api_key_env_var || DEEPSEEK_MODEL_PRESET.api_key_env_var,
+        api_key_env_var: nextModelConfig.api_key_env_var || "",
         enabled: nextModelConfig.enabled,
         estimation_only: nextModelConfig.estimation_only,
         timeout_ms: nextModelConfig.timeout_ms,
         input_price_per_million: nextModelConfig.input_price_per_million,
         output_price_per_million: nextModelConfig.output_price_per_million
       });
+      setModelApiKey("");
       const firstProfile = nextModelProfiles.profiles[0] ?? null;
       if (firstProfile && selectedModelProfileId === null) {
         setSelectedModelProfileId(firstProfile.id);
@@ -422,21 +455,22 @@ function App() {
     setError(null);
     setModelMessage(null);
     try {
-      const saved = await api.updateModelConfig(modelDraft);
+      const saved = await api.updateModelConfig(withModelApiKey(modelDraft, modelApiKey));
       setModelConfig(saved);
       setModelTestResult(null);
+      setModelApiKey("");
       setModelDraft({
         provider: saved.provider,
         model: saved.model,
         base_url: saved.base_url,
-        api_key_env_var: saved.api_key_env_var,
+        api_key_env_var: saved.api_key_env_var || "",
         enabled: saved.enabled,
         estimation_only: saved.estimation_only,
         timeout_ms: saved.timeout_ms,
         input_price_per_million: saved.input_price_per_million,
         output_price_per_million: saved.output_price_per_million
       });
-      setModelMessage(saved.api_key_configured ? "DeepSeek 已接入，生成材料会调用模型。" : `已保存配置，请在后端环境变量 ${saved.api_key_env_var} 中放入 API Key。`);
+      setModelMessage(saved.api_key_configured ? `模型已接入：${saved.model}，${keyStatusText(saved)}。` : "已保存配置，但还没有 API Key。");
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     }
@@ -455,8 +489,9 @@ function App() {
     }
     setModelProfileName(profile.name);
     setModelDraft(toModelConfigUpdate(profile));
+    setModelApiKey("");
     setModelTestResult(null);
-    setModelMessage(`已载入模型档案：${profile.name}`);
+    setModelMessage(`已载入模型档案：${profile.name}，${keyStatusText(profile)}。`);
   }
 
   function handleNewModelProfile() {
@@ -464,6 +499,7 @@ function App() {
     setModelProfileName("");
     setModelProfileQuery("");
     setModelDraft(DEEPSEEK_MODEL_PRESET);
+    setModelApiKey("");
     setModelTestResult(null);
     setModelMessage("已切换为新建模型档案，填写名称后保存。");
   }
@@ -480,8 +516,8 @@ function App() {
     try {
       const saved =
         selectedModelProfileId === null
-          ? await api.createModelProfile(profileName, modelDraft)
-          : await api.updateModelProfile(selectedModelProfileId, profileName, modelDraft);
+          ? await api.createModelProfile(profileName, withModelApiKey(modelDraft, modelApiKey))
+          : await api.updateModelProfile(selectedModelProfileId, profileName, withModelApiKey(modelDraft, modelApiKey));
       setModelProfiles((current) => {
         const nextProfiles = current.filter((profile) => profile.id !== saved.id);
         return [...nextProfiles, saved].sort((left, right) => left.id - right.id);
@@ -489,7 +525,8 @@ function App() {
       setSelectedModelProfileId(saved.id);
       setModelProfileName(saved.name);
       setModelDraft(toModelConfigUpdate(saved));
-      setModelMessage(saved.api_key_configured ? `模型档案已保存：${saved.name}，Key 已配置。` : `模型档案已保存：${saved.name}，等待环境变量 ${saved.api_key_env_var}。`);
+      setModelApiKey("");
+      setModelMessage(saved.api_key_configured ? `模型档案已保存：${saved.name}，${keyStatusText(saved)}。` : `模型档案已保存：${saved.name}，但还没有 API Key。`);
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
@@ -509,8 +546,9 @@ function App() {
       const saved = await api.applyModelProfile(selectedModelProfileId);
       setModelConfig(saved);
       setModelDraft(toModelConfigUpdate(saved));
+      setModelApiKey("");
       setModelTestResult(null);
-      setModelMessage(`已套用模型档案到当前全局配置：${saved.model}`);
+      setModelMessage(`已套用模型档案到当前全局配置：${saved.model}，${keyStatusText(saved)}。`);
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
@@ -534,6 +572,7 @@ function App() {
       setModelProfiles((current) => current.filter((profile) => profile.id !== selectedModelProfileId));
       setSelectedModelProfileId(null);
       setModelProfileName("");
+      setModelApiKey("");
       setModelMessage("模型档案已删除，当前全局模型配置不会被自动清空。");
     } catch (nextError) {
       setError(toErrorMessage(nextError));
@@ -553,7 +592,7 @@ function App() {
       setModelMessage(
         result.status === "success"
           ? `模型连接成功：${result.provider} / ${result.model} / ${result.duration_ms}ms`
-          : `模型连接失败：${result.error || "请检查 API 地址、模型名和环境变量。"}`
+          : `模型连接失败：${result.error || "请检查 API 地址、模型名和 API Key。"}`
       );
     } catch (nextError) {
       setError(toErrorMessage(nextError));
@@ -1193,85 +1232,73 @@ function App() {
           </Panel>
 
           <Panel title="模型 / API" kicker="LLM Agent">
-            <div className="model-manager-entry">
+            <div className="model-simple-card">
               <div>
-                <b>Model Picker</b>
-                <span>
-                  {selectedModelProfile
-                    ? `${selectedModelProfile.name} / ${selectedModelProfile.model}`
-                    : modelConfig
-                      ? `Auto / ${modelConfig.model}`
-                      : "Auto / waiting for model config"}
-                </span>
+                <span>当前主模型</span>
+                <b>{modelConfig ? modelConfig.model : "未读取"}</b>
+                <small>{modelConfig ? `${modelConfig.provider} · ${modelConfig.enabled && !modelConfig.estimation_only ? "真实调用" : "本地/估算"}` : "后端启动后会自动读取。"}</small>
               </div>
-              <button type="button" onClick={() => setIsModelManagerOpen(true)}>
-                Manage Models...
-              </button>
+              <div>
+                <span>API Key</span>
+                <b>{keyStatusText(modelConfig)}</b>
+                <small>{modelApiKey ? "将保存新的 Key" : "留空会沿用已保存 Key。"}</small>
+              </div>
             </div>
-            <section>
-              <h3>模型档案</h3>
-              <div className="search-form">
-                <label>
-                  <span>已保存模型</span>
-                  <select
-                    value={selectedModelProfileId ?? ""}
-                    onChange={(event) => handleSelectModelProfile(event.target.value)}
-                  >
-                    <option value="">新建 / 未选择</option>
-                    {modelProfiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profile.name} · {profile.model}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>档案名称</span>
-                  <input
-                    value={modelProfileName}
-                    onChange={(event) => setModelProfileName(event.target.value)}
-                    placeholder="例如：DeepSeek v4pro"
-                  />
-                </label>
-                <button type="button" onClick={handleNewModelProfile}>
-                  新建模型档案
-                </button>
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={() => void handleSaveModelProfile()}
-                  disabled={busy.modelProfileAction === "save"}
-                >
-                  {busy.modelProfileAction === "save" ? "保存中..." : "保存/更新档案"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleApplyModelProfile()}
-                  disabled={selectedModelProfileId === null || busy.modelProfileAction === "apply"}
-                >
-                  {busy.modelProfileAction === "apply" ? "套用中..." : "套用为当前模型"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteModelProfile()}
-                  disabled={selectedModelProfileId === null || busy.modelProfileAction === "delete"}
-                >
-                  {busy.modelProfileAction === "delete" ? "删除中..." : "删除档案"}
-                </button>
-              </div>
-              <div className="run-line">
-                <span className="status-dot" />
-                {modelProfiles.length ? `已保存 ${modelProfiles.length} 个模型档案` : "还没有模型档案，可先保存 DeepSeek 配置。"}
-              </div>
-            </section>
-            <form className="search-form" onSubmit={handleSaveModelConfig}>
+            <form className="model-simple-form" onSubmit={handleSaveModelConfig}>
               <label>
-                <span>模型</span>
+                <span>已保存模型</span>
+                <select value={selectedModelProfileId ?? ""} onChange={(event) => handleSelectModelProfile(event.target.value)}>
+                  <option value="">新建 / 当前主模型</option>
+                  {modelProfiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name} · {profile.model}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>档案名称</span>
                 <input
+                  value={modelProfileName}
+                  onChange={(event) => setModelProfileName(event.target.value)}
+                  placeholder="例如：DeepSeek v4 Pro"
+                />
+              </label>
+              <label>
+                <span>服务商</span>
+                <select
+                  value={modelDraft.provider}
+                  onChange={(event) =>
+                    setModelDraft((current) => ({
+                      ...current,
+                      provider: event.target.value,
+                      enabled: event.target.value !== "local",
+                      estimation_only: event.target.value === "local"
+                    }))
+                  }
+                >
+                  {MODEL_PROVIDER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>模型版本</span>
+                <input
+                  list="model-version-options"
                   value={modelDraft.model}
                   onChange={(event) => setModelDraft((current) => ({ ...current, model: event.target.value }))}
                   placeholder="deepseek-v4-pro"
                 />
+                <datalist id="model-version-options">
+                  {MODEL_VERSION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </datalist>
               </label>
               <label>
                 <span>API 地址</span>
@@ -1281,202 +1308,90 @@ function App() {
                   placeholder="https://api.deepseek.com"
                 />
               </label>
-              <label>
-                <span>Key 环境变量</span>
-                <input
-                  value={modelDraft.api_key_env_var}
-                  onChange={(event) => setModelDraft((current) => ({ ...current, api_key_env_var: event.target.value }))}
-                  placeholder="DEEPSEEK_API_KEY"
-                />
+              <label className="api-key-field">
+                <span>模型 API Key</span>
+                <div className="secret-input-row">
+                  <input
+                    type={showModelApiKey ? "text" : "password"}
+                    value={modelApiKey}
+                    onChange={(event) => setModelApiKey(event.target.value)}
+                    placeholder={modelConfig?.api_key_configured ? "留空沿用已保存 Key" : "粘贴你的真实 API Key"}
+                    autoComplete="off"
+                  />
+                  <button type="button" onClick={() => setShowModelApiKey((current) => !current)}>
+                    {showModelApiKey ? "隐藏" : "显示"}
+                  </button>
+                </div>
               </label>
-              <div className="segmented">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={modelDraft.enabled}
-                    onChange={(event) => setModelDraft((current) => ({ ...current, enabled: event.target.checked }))}
-                  />
-                  启用真实模型
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={!modelDraft.estimation_only}
-                    onChange={(event) => setModelDraft((current) => ({ ...current, estimation_only: !event.target.checked }))}
-                  />
-                  调用 DeepSeek
-                </label>
+              <div className="model-simple-actions">
+                <button type="button" onClick={handleNewModelProfile}>
+                  新建档案
+                </button>
+                <button className="primary" type="submit">
+                  保存为当前模型
+                </button>
+                <button type="button" onClick={() => void handleSaveModelProfile()} disabled={busy.modelProfileAction === "save"}>
+                  {busy.modelProfileAction === "save" ? "保存中..." : "保存/更新档案"}
+                </button>
+                <button type="button" onClick={() => void handleApplyModelProfile()} disabled={selectedModelProfileId === null || busy.modelProfileAction === "apply"}>
+                  {busy.modelProfileAction === "apply" ? "套用中..." : "套用档案"}
+                </button>
+                <button type="button" onClick={() => void handleDeleteModelProfile()} disabled={selectedModelProfileId === null || busy.modelProfileAction === "delete"}>
+                  {busy.modelProfileAction === "delete" ? "删除中..." : "删除档案"}
+                </button>
+                <button type="button" onClick={() => void handleTestModelConnection()} disabled={busy.modelTest}>
+                  {busy.modelTest ? "测试中..." : "测试连接"}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setModelDraft(DEEPSEEK_MODEL_PRESET);
-                  setModelTestResult(null);
-                  setModelMessage("已填入 DeepSeek v4pro 官方模型名 deepseek-v4-pro，请确认后保存。");
-                }}
-              >
-                使用 DeepSeek v4pro 预设
-              </button>
-              <button className="primary" type="submit">
-                保存模型配置
-              </button>
-              <button type="button" onClick={() => void handleTestModelConnection()} disabled={busy.modelTest}>
-                {busy.modelTest ? "测试中..." : "测试模型连接"}
-              </button>
             </form>
-            <div className="run-line">
-              {modelConfig ? (
-                <>
-                  <span className="status-dot" />
-                  {modelConfig.enabled && !modelConfig.estimation_only ? "真实模型" : "本地/估算"} · {modelConfig.model}
-                  {" · "}
-                  {modelConfig.api_key_configured ? "Key 已配置" : `等待环境变量 ${modelConfig.api_key_env_var}`}
-                </>
-              ) : (
-                "等待读取模型配置"
-              )}
-            </div>
             {modelTestResult ? (
-              <div className="run-line">
-                <span className="status-dot" />
-                {modelTestResult.status === "success" ? "连接成功" : "连接失败"} · {modelTestResult.provider} / {modelTestResult.model}
-                {" · "}
-                {modelTestResult.duration_ms}ms · {modelTestResult.api_key_configured ? "Key 已配置" : "Key 未配置"}
-                {modelTestResult.status !== "success" ? ` · ${modelTestResult.error || "未知错误"}` : ""}
+              <div className={`model-test-result ${modelTestResult.status === "success" ? "success" : "failed"}`}>
+                <b>{modelTestResult.status === "success" ? "连接成功" : "连接失败"}</b>
+                <span>{modelTestResult.provider} / {modelTestResult.model} · {modelTestResult.duration_ms}ms</span>
+                {modelTestResult.status !== "success" ? <small>{modelTestResult.error || "请检查 API 地址、模型名和 API Key。"}</small> : null}
               </div>
             ) : null}
-            {modelMessage ? <small>{modelMessage}</small> : null}
-            <section>
-              <h3>Agent 模型路由</h3>
-              <div className="split-list">
+            {modelMessage ? <small className="model-message">{modelMessage}</small> : null}
+            <details className="advanced-model-routes">
+              <summary>高级：不同 Agent 使用不同模型</summary>
+              <div className="model-route-simple-list">
                 {modelRoutes.map((route) => {
-                  const draft = modelRouteDrafts[route.agent_name] ?? toModelConfigUpdate(route);
-                  const preset = route.agent_name === "JobMatchAgent" ? DEEPSEEK_FLASH_MODEL_PRESET : DEEPSEEK_MODEL_PRESET;
-                  const presetLabel = route.agent_name === "JobMatchAgent" ? "DeepSeek v4flash" : "DeepSeek v4pro";
                   const selectedRouteProfileId = modelRouteProfileSelections[route.agent_name] ?? "";
                   return (
-                    <form
-                      className="search-form"
-                      key={route.agent_name}
-                      onSubmit={(event) => void handleSaveModelRoute(event, route.agent_name)}
-                    >
+                    <div className="model-route-simple" key={route.agent_name}>
                       <div>
                         <b>{MODEL_ROUTE_AGENT_LABELS[route.agent_name] ?? route.agent_name}</b>
-                        <small>
-                          {route.agent_name} · {route.api_key_configured ? "Key 已配置" : `等待 ${route.api_key_env_var}`}
-                        </small>
+                        <small>当前：{route.model} · {keyStatusText(route)}</small>
                       </div>
-                      <label>
-                        <span>从模型档案套用</span>
-                        <select
-                          value={selectedRouteProfileId}
-                          onChange={(event) =>
-                            setModelRouteProfileSelections((current) => ({
-                              ...current,
-                              [route.agent_name]: event.target.value ? Number(event.target.value) : ""
-                            }))
-                          }
-                        >
-                          <option value="">选择模型档案</option>
-                          {modelProfiles.map((profile) => (
-                            <option key={profile.id} value={profile.id}>
-                              {profile.name} · {profile.model}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      <select
+                        value={selectedRouteProfileId}
+                        onChange={(event) =>
+                          setModelRouteProfileSelections((current) => ({
+                            ...current,
+                            [route.agent_name]: event.target.value ? Number(event.target.value) : ""
+                          }))
+                        }
+                      >
+                        <option value="">选择模型档案</option>
+                        {modelProfiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.name} · {profile.model}
+                          </option>
+                        ))}
+                      </select>
                       <button
                         type="button"
                         onClick={() => void handleApplyProfileToModelRoute(route.agent_name)}
                         disabled={!selectedRouteProfileId || busy.modelRouteAgent === route.agent_name}
                       >
-                        套用并保存到此 Agent
+                        {busy.modelRouteAgent === route.agent_name ? "保存中..." : "套用到此 Agent"}
                       </button>
-                      <label>
-                        <span>模型</span>
-                        <input
-                          value={draft.model}
-                          onChange={(event) =>
-                            setModelRouteDrafts((current) => ({
-                              ...current,
-                              [route.agent_name]: { ...draft, model: event.target.value }
-                            }))
-                          }
-                          placeholder={preset.model}
-                        />
-                      </label>
-                      <label>
-                        <span>API 地址</span>
-                        <input
-                          value={draft.base_url}
-                          onChange={(event) =>
-                            setModelRouteDrafts((current) => ({
-                              ...current,
-                              [route.agent_name]: { ...draft, base_url: event.target.value }
-                            }))
-                          }
-                          placeholder="https://api.deepseek.com"
-                        />
-                      </label>
-                      <label>
-                        <span>Key 环境变量</span>
-                        <input
-                          value={draft.api_key_env_var}
-                          onChange={(event) =>
-                            setModelRouteDrafts((current) => ({
-                              ...current,
-                              [route.agent_name]: { ...draft, api_key_env_var: event.target.value }
-                            }))
-                          }
-                          placeholder="DEEPSEEK_API_KEY"
-                        />
-                      </label>
-                      <div className="segmented">
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={draft.enabled}
-                            onChange={(event) =>
-                              setModelRouteDrafts((current) => ({
-                                ...current,
-                                [route.agent_name]: { ...draft, enabled: event.target.checked }
-                              }))
-                            }
-                          />
-                          启用
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={!draft.estimation_only}
-                            onChange={(event) =>
-                              setModelRouteDrafts((current) => ({
-                                ...current,
-                                [route.agent_name]: { ...draft, estimation_only: !event.target.checked }
-                              }))
-                            }
-                          />
-                          调用模型
-                        </label>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setModelRouteDrafts((current) => ({ ...current, [route.agent_name]: preset }));
-                          setModelRouteMessage(`${MODEL_ROUTE_AGENT_LABELS[route.agent_name] ?? route.agent_name} 已填入 ${presetLabel} 预设。`);
-                        }}
-                      >
-                        套用 {presetLabel}
-                      </button>
-                      <button className="primary" type="submit" disabled={busy.modelRouteAgent === route.agent_name}>
-                        {busy.modelRouteAgent === route.agent_name ? "保存中..." : "保存 Agent 路由"}
-                      </button>
-                    </form>
+                    </div>
                   );
                 })}
               </div>
               {modelRouteMessage ? <small>{modelRouteMessage}</small> : null}
-            </section>
+            </details>
           </Panel>
 
           <Panel title="搜索任务" kicker="Search Run">
@@ -2266,197 +2181,6 @@ function App() {
           <RateChart title="按平台" buckets={analytics?.platform ?? {}} labelMap={PLATFORM_LABELS} />
         </Panel>
       </section>
-      {isModelManagerOpen ? (
-        <div className="modal-backdrop" role="presentation" onClick={() => setIsModelManagerOpen(false)}>
-          <aside
-            className="model-manager-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Manage Models"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-heading">
-              <div>
-                <span>LLM Agent</span>
-                <h2>Manage Models</h2>
-                <p>选择、搜索、保存、更新或删除不同模型版本。真实 API Key 仍只通过环境变量读取。</p>
-              </div>
-              <button type="button" onClick={() => setIsModelManagerOpen(false)}>
-                关闭
-              </button>
-            </div>
-            <div className="model-manager-grid">
-              <section className="model-picker-pane">
-                <label className="model-search">
-                  <span>Search models</span>
-                  <input
-                    value={modelProfileQuery}
-                    onChange={(event) => setModelProfileQuery(event.target.value)}
-                    placeholder="DeepSeek / v4pro / api.deepseek.com"
-                  />
-                </label>
-                <button
-                  type="button"
-                  className={`model-option ${selectedModelProfileId === null ? "active" : ""}`}
-                  onClick={() => {
-                    setSelectedModelProfileId(null);
-                    setModelProfileName("");
-                    if (modelConfig) {
-                      setModelDraft(toModelConfigUpdate(modelConfig));
-                    }
-                    setModelMessage("已切换为 Auto：使用当前全局模型配置。");
-                  }}
-                >
-                  <span>✓</span>
-                  <div>
-                    <b>Auto</b>
-                    <small>{modelConfig ? modelConfig.model : "等待模型配置"}</small>
-                  </div>
-                </button>
-                {filteredModelProfiles.map((profile) => (
-                  <button
-                    type="button"
-                    className={`model-option ${selectedModelProfileId === profile.id ? "active" : ""}`}
-                    key={profile.id}
-                    onClick={() => handleSelectModelProfile(String(profile.id))}
-                  >
-                    <span>{selectedModelProfileId === profile.id ? "✓" : ""}</span>
-                    <div>
-                      <b>{profile.name}</b>
-                      <small>{profile.provider} / {profile.model}</small>
-                      <small>{profile.api_key_configured ? "Key 已配置" : `等待 ${profile.api_key_env_var}`}</small>
-                    </div>
-                  </button>
-                ))}
-                {filteredModelProfiles.length === 0 ? (
-                  <div className="model-empty">没有匹配的模型档案，可以在右侧新建。</div>
-                ) : null}
-              </section>
-              <form className="model-profile-editor" onSubmit={(event) => { event.preventDefault(); void handleSaveModelProfile(); }}>
-                <div className="editor-title">
-                  <b>{selectedModelProfile ? "编辑模型档案" : "新建模型档案"}</b>
-                  <button type="button" onClick={handleNewModelProfile}>
-                    新建
-                  </button>
-                </div>
-                <label>
-                  <span>档案名称</span>
-                  <input
-                    value={modelProfileName}
-                    onChange={(event) => setModelProfileName(event.target.value)}
-                    placeholder="例如：DeepSeek v4pro"
-                  />
-                </label>
-                <label>
-                  <span>Provider</span>
-                  <input
-                    value={modelDraft.provider}
-                    onChange={(event) => setModelDraft((current) => ({ ...current, provider: event.target.value }))}
-                    placeholder="openai-compatible"
-                  />
-                </label>
-                <label>
-                  <span>Model</span>
-                  <input
-                    value={modelDraft.model}
-                    onChange={(event) => setModelDraft((current) => ({ ...current, model: event.target.value }))}
-                    placeholder="deepseek-v4-pro"
-                  />
-                </label>
-                <label>
-                  <span>API 地址</span>
-                  <input
-                    value={modelDraft.base_url}
-                    onChange={(event) => setModelDraft((current) => ({ ...current, base_url: event.target.value }))}
-                    placeholder="https://api.deepseek.com"
-                  />
-                </label>
-                <label>
-                  <span>Key 环境变量</span>
-                  <input
-                    value={modelDraft.api_key_env_var}
-                    onChange={(event) => setModelDraft((current) => ({ ...current, api_key_env_var: event.target.value }))}
-                    placeholder="DEEPSEEK_API_KEY"
-                  />
-                </label>
-                <div className="segmented">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={modelDraft.enabled}
-                      onChange={(event) => setModelDraft((current) => ({ ...current, enabled: event.target.checked }))}
-                    />
-                    启用
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={!modelDraft.estimation_only}
-                      onChange={(event) => setModelDraft((current) => ({ ...current, estimation_only: !event.target.checked }))}
-                    />
-                    调用模型
-                  </label>
-                </div>
-                <div className="model-manager-actions">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setModelDraft(DEEPSEEK_MODEL_PRESET);
-                      setModelProfileName(modelProfileName || "DeepSeek v4pro");
-                      setModelTestResult(null);
-                    }}
-                  >
-                    DeepSeek v4pro
-                  </button>
-                  <button className="primary" type="submit" disabled={busy.modelProfileAction === "save"}>
-                    {busy.modelProfileAction === "save" ? "保存中..." : "保存/更新"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleApplyModelProfile()}
-                    disabled={selectedModelProfileId === null || busy.modelProfileAction === "apply"}
-                  >
-                    {busy.modelProfileAction === "apply" ? "套用中..." : "套用为当前模型"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleDeleteModelProfile()}
-                    disabled={selectedModelProfileId === null || busy.modelProfileAction === "delete"}
-                  >
-                    {busy.modelProfileAction === "delete" ? "删除中..." : "删除"}
-                  </button>
-                </div>
-                <section className="model-route-quick-apply">
-                  <div>
-                    <b>套用到 Agent 路由</b>
-                    <small>将当前选中的模型档案保存到指定 Agent；未选择档案时不会执行。</small>
-                  </div>
-                  {modelRouteApplyOptions.map((option) => (
-                    <div className="model-route-card" key={option.agentName}>
-                      <div>
-                        <b>{option.label}</b>
-                        <small>{option.agentName}</small>
-                        <small>当前：{option.currentModel}</small>
-                        <small>目标：{option.targetModel} / {option.keyStatus}</small>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleApplyProfileToModelRoute(option.agentName, selectedModelProfileId)}
-                        disabled={!option.canApply || busy.modelRouteAgent === option.agentName}
-                      >
-                        {busy.modelRouteAgent === option.agentName ? "套用中..." : "套用到此 Agent"}
-                      </button>
-                    </div>
-                  ))}
-                  {modelRouteApplyOptions.length === 0 ? (
-                    <div className="model-empty">后端还没有返回可配置的 Agent 路由。</div>
-                  ) : null}
-                </section>
-              </form>
-            </div>
-          </aside>
-        </div>
-      ) : null}
       {detailJob ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setDetailJobId(null)}>
           <aside

@@ -981,6 +981,116 @@ pre {
   font-weight: 800;
 }
 
+.model-simple-card {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.model-simple-card > div {
+  background: #fffdf7;
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+}
+
+.model-simple-card span,
+.model-message,
+.model-route-simple small,
+.model-test-result span,
+.model-test-result small {
+  color: var(--muted);
+}
+
+.model-simple-card b {
+  font-family: "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.model-simple-form {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.api-key-field,
+.model-simple-actions,
+.advanced-model-routes,
+.model-test-result,
+.model-message {
+  grid-column: 1 / -1;
+}
+
+.secret-input-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr auto;
+}
+
+.secret-input-row button {
+  min-width: 72px;
+}
+
+.model-simple-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.model-test-result {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px 12px;
+}
+
+.model-test-result.success {
+  background: var(--green-soft);
+  border-color: #b7d4ca;
+}
+
+.model-test-result.failed {
+  background: #f4d6ce;
+  border-color: #cf7967;
+}
+
+.advanced-model-routes {
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 10px;
+}
+
+.advanced-model-routes summary {
+  color: var(--green-deep);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.model-route-simple-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.model-route-simple {
+  align-items: center;
+  background: #fffaf0;
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr minmax(160px, 0.8fr) auto;
+  padding: 10px;
+}
+
+.model-route-simple div {
+  display: grid;
+  gap: 3px;
+}
+
 .model-manager-modal {
   background: var(--paper);
   border: 2px solid var(--line-dark);
@@ -1400,6 +1510,10 @@ pre {
   .search-form,
   .toolbar,
   .split-list,
+  .model-simple-card,
+  .model-simple-form,
+  .model-simple-actions,
+  .model-route-simple,
   .rate-row {
     grid-template-columns: 1fr;
   }

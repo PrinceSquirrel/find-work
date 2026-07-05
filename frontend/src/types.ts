@@ -200,6 +200,8 @@ export interface ModelConfig {
   model: string;
   base_url: string;
   api_key_env_var: string;
+  api_key_secret_id?: string;
+  api_key_masked?: string;
   api_key_configured: boolean;
   enabled: boolean;
   estimation_only: boolean;
@@ -213,6 +215,7 @@ export interface ModelConfigUpdate {
   model: string;
   base_url: string;
   api_key_env_var: string;
+  api_key?: string;
   enabled: boolean;
   estimation_only: boolean;
   timeout_ms: number;

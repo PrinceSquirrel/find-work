@@ -1,5 +1,51 @@
 # Codex Recovery Status
 
+## 7G-2：前端简化模型/API 面板
+### 当前真实状态
+- “模型 / API”面板已从复杂的 Model Picker、环境变量名、模型档案表单和完整 Agent 路由表单，收敛成简单模式。
+- 用户现在可以在同一块区域完成：选择服务商、选择/输入模型版本、填写 API 地址、粘贴真实 API Key、显示/隐藏 Key、保存为当前模型、测试连接。
+- API Key 输入框是密码框；保存后会清空输入框，只显示后端返回的脱敏 Key 状态。
+- 模型档案仍保留，但入口简化为“已保存模型 / 档案名称 / 保存更新 / 套用 / 删除档案”。
+- 不同 Agent 使用不同模型的能力先收进“高级：不同 Agent 使用不同模型”折叠区，只允许从已保存模型档案套用，避免暴露大量后端字段。
+
+### 已完成
+- 前端 `ModelConfig` 类型支持 `api_key_secret_id`、`api_key_masked`，`ModelConfigUpdate` 支持真实 `api_key`。
+- `api.updateModelConfig()` 测试覆盖：真实 Key + 空环境变量名会进入请求体，响应不需要明文 Key。
+- `App.tsx` 新增真实 Key 输入、显示/隐藏、保存后清空、脱敏状态展示。
+- 可见模型面板删掉环境变量名入口，不再要求用户理解 `DEEPSEEK_API_KEY`。
+- 新增简洁模型面板和折叠 Agent 路由样式，并适配移动端。
+
+### 未完成
+- 后端还没有独立“删除当前保存 API Key”的接口；当前删除按钮删除的是模型档案，不是全局 Key。
+- `OrchestratorAgent` 总模型大脑路由还未加入前端/后端白名单。
+- 后端操作页 `GET /api/system/health` 和对应系统状态 UI 还未开始。
+
+### 风险
+- 旧的模型管理弹窗渲染块已删除，但部分旧状态/handler 仍留在 `App.tsx` 供后续路由表收敛时复用；后续可以继续瘦身。
+- 如果用户没有输入新 Key，保存配置会沿用后端已有 Key；如果从未保存过 Key，测试连接仍会失败并提示检查 API Key。
+- 高级 Agent 路由当前只能套用已保存模型档案，不能在折叠区直接输入新的 Key。
+
+### 下一步任务
+- 7G-3：加入 `OrchestratorAgent` 总模型大脑，并把总模型、简历解析、岗位匹配、简历/招呼语生成、审核做成简洁路由表。
+- 7G-4：补“删除当前保存 API Key”的后端接口和前端按钮。
+- 7H：新增一眼看懂的系统状态 / 后端控制台。
+
+### 最近修改文件
+- `frontend/src/types.ts`
+- `frontend/src/lib/api.test.ts`
+- `frontend/src/App.tsx`
+- `frontend/src/styles.css`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`npm run lint` 先失败于 `api_key` 和 `api_key_masked` 类型不存在。
+- 绿测：`npm test -- --run src/lib/api.test.ts` 通过，16 条前端 API 单测通过。
+- `npm test -- --run` 通过，38 条前端测试通过。
+- `npm run lint` 通过。
+- `npm run build` 通过。
+- `python -m pytest backend\tests\test_api_flow.py::test_model_config_accepts_saved_api_key_without_leaking_plaintext -q` 通过。
+- `git diff --check` 通过，仅有 Windows 行尾转换提示。
+
 ## 7G-1：后端真实 API Key 本地保存
 ### 当前真实状态
 - `/api/model-config` 现在可以接收真实 `api_key`，也允许 `api_key_env_var=""`，不再强迫用户填写环境变量名。

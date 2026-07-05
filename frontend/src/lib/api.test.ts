@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError, api, getTailorBlockedMessage } from "./api";
+import type { ModelConfigUpdate } from "../types";
 
 describe("api client", () => {
   afterEach(() => {
@@ -126,6 +127,50 @@ describe("api client", () => {
           input_price_per_million: 1,
           output_price_per_million: 2
         })
+      })
+    );
+  });
+
+  test("model config update can send a saved real API key without an env var", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        provider: "openai-compatible",
+        model: "deepseek-v4-pro",
+        base_url: "https://api.deepseek.com",
+        api_key_env_var: "",
+        api_key_secret_id: "model_config:1",
+        api_key_masked: "********7890",
+        api_key_configured: true,
+        enabled: true,
+        estimation_only: false,
+        timeout_ms: 90000,
+        input_price_per_million: 1,
+        output_price_per_million: 2
+      })
+    } as Response);
+    const payload: ModelConfigUpdate = {
+      provider: "openai-compatible",
+      model: "deepseek-v4-pro",
+      base_url: "https://api.deepseek.com",
+      api_key_env_var: "",
+      api_key: "sk-live-secret-1234567890",
+      enabled: true,
+      estimation_only: false,
+      timeout_ms: 90000,
+      input_price_per_million: 1,
+      output_price_per_million: 2
+    };
+
+    const result = await api.updateModelConfig(payload);
+
+    expect(result.api_key_configured).toBe(true);
+    expect(result.api_key_masked).toBe("********7890");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/model-config",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify(payload)
       })
     );
   });
