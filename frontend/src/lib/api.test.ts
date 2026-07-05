@@ -233,6 +233,36 @@ describe("api client", () => {
     );
   });
 
+  test("getSystemHealth requests the backend status cards", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: "yellow",
+        generated_at: "2026-07-06T08:00:00Z",
+        checks: [
+          {
+            id: "backend",
+            label: "后端运行",
+            status: "green",
+            summary: "FastAPI 服务正在响应",
+            detail: "",
+            next_action: "无需处理",
+            metadata: {}
+          }
+        ]
+      })
+    } as Response);
+
+    const result = await api.getSystemHealth();
+
+    expect(result.status).toBe("yellow");
+    expect(result.checks[0].label).toBe("后端运行");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/system/health",
+      expect.objectContaining({ headers: expect.objectContaining({ "Content-Type": "application/json" }) })
+    );
+  });
+
   test("model profile endpoints support manage models CRUD and apply", async () => {
     const profilePayload = {
       id: 7,

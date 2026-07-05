@@ -23,6 +23,7 @@ import type {
   ResumeDraft,
   SearchRun,
   SearchRunRequest,
+  SystemHealthResponse,
   TailoredResumePreview,
   TailoredResumeRevision,
   TailorBundle
@@ -217,6 +218,10 @@ export const api = {
 
   getLlmUsage(): Promise<LLMUsageSummary> {
     return request<LLMUsageSummary>("/api/metrics/llm-usage");
+  },
+
+  getSystemHealth(): Promise<SystemHealthResponse> {
+    return request<SystemHealthResponse>("/api/system/health");
   },
 
   getModelConfig(): Promise<ModelConfig> {

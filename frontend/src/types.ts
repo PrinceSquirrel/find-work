@@ -243,6 +243,22 @@ export interface ModelConfigTestResult {
   error?: string;
 }
 
+export interface SystemHealthCheck {
+  id: string;
+  label: string;
+  status: "green" | "yellow" | "red" | string;
+  summary: string;
+  detail: string;
+  next_action: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface SystemHealthResponse {
+  status: "green" | "yellow" | "red" | string;
+  generated_at: string;
+  checks: SystemHealthCheck[];
+}
+
 export interface AgentModelRoute extends ModelConfig {
   agent_name: string;
 }

@@ -1,5 +1,46 @@
 # Codex Recovery Status
 
+## 7H-2A：前端系统状态 / 后端控制台首屏
+### 当前真实状态
+- 前端已接入 `GET /api/system/health`，页面顶部会显示“系统状态 / 后端控制台”区域。
+- 控制台展示总体状态、最近更新时间、最需要处理的状态卡，以及后端、数据库、CDP、平台会话、模型、PDF、OCR 等状态卡。
+- 控制台提供快捷按钮：刷新状态、测试模型、启动 CDP、刷新平台会话。
+- 本阶段复用现有布局和按钮样式，没有新增独立 CSS；先保证功能可见、可验证。
+
+### 已完成
+- 前端类型新增 `SystemHealthCheck` / `SystemHealthResponse`。
+- API client 新增 `api.getSystemHealth()`，并有单元测试覆盖 endpoint。
+- `App.tsx` 启动时读取系统健康状态，并在页面中渲染状态卡。
+- 状态卡不会显示真实 API Key，只展示后端返回的脱敏状态。
+
+### 未完成
+- 状态卡视觉还比较基础，后续可做更清晰的绿/黄/红卡片样式和最近错误弹窗。
+- “检查 PDF/OCR”目前通过状态接口展示依赖状态，还没有单独的前端按钮触发后端专项检查。
+- 后续需要把系统状态与更多操作后的自动刷新打磨得更细。
+
+### 风险
+- 当前沿用已有页面布局，信息能看见但还不是最终精美控制台。
+- 如果后端未启动，控制台仍会走全局错误提示；后续可以做局部错误兜底。
+
+### 下一步任务
+- 7H-2B：补系统控制台视觉样式和局部错误/最近错误展示。
+- 后续：继续推进 OrchestratorAgent 低风险规划、RAG、Skill Registry 和 MCP Gateway。
+
+### 最近修改文件
+- `frontend/src/types.ts`
+- `frontend/src/lib/api.ts`
+- `frontend/src/lib/api.test.ts`
+- `frontend/src/App.tsx`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`npm test -- --run src/lib/api.test.ts -t getSystemHealth` 先失败于 `api.getSystemHealth is not a function`。
+- 绿测：同一命令通过，1 条目标测试通过。
+- 前端 API 测试：`npm test -- --run src/lib/api.test.ts` 通过，18 条测试通过。
+- 前端全量：`npm test -- --run` 通过，40 条测试通过。
+- 类型检查：`npm run lint` 通过。
+- 构建：`npm run build` 通过。
+
 ## 7H-1：系统状态 / 后端控制台 API
 ### 当前真实状态
 - 后端新增 `GET /api/system/health`，用于给前端“系统状态 / 后端控制台”提供绿/黄/红状态卡数据。

@@ -45,6 +45,7 @@ import type {
   PlatformSession,
   ResumeDraft,
   SearchRun,
+  SystemHealthResponse,
   TailorBundle
 } from "./types";
 
@@ -136,6 +137,7 @@ type BusyState = {
   manualDetailJobId: number | null;
   manualResumeText: boolean;
   revisionTailoredResumeId: number | null;
+  systemHealth: boolean;
   modelTest: boolean;
   modelKeyDelete: boolean;
   modelRouteAgent: string | null;
@@ -157,6 +159,7 @@ const initialBusy: BusyState = {
   manualDetailJobId: null,
   manualResumeText: false,
   revisionTailoredResumeId: null,
+  systemHealth: false,
   modelTest: false,
   modelKeyDelete: false,
   modelRouteAgent: null,
@@ -220,6 +223,7 @@ function App() {
   const [modelRouteDrafts, setModelRouteDrafts] = useState<Record<string, ModelConfigUpdate>>({});
   const [modelRouteProfileSelections, setModelRouteProfileSelections] = useState<Record<string, number | "">>({});
   const [modelRouteMessage, setModelRouteMessage] = useState<string | null>(null);
+  const [systemHealth, setSystemHealth] = useState<SystemHealthResponse | null>(null);
   const [agentEvents, setAgentEvents] = useState<Awaited<ReturnType<typeof api.getAgentEvents>> | null>(null);
   const [tailorBundles, setTailorBundles] = useState<Record<number, TailorBundle>>({});
   const [tailoredRevisionDrafts, setTailoredRevisionDrafts] = useState<Record<number, string>>({});
@@ -373,7 +377,8 @@ function App() {
         nextAgentEvents,
         nextModelConfig,
         nextModelRoutes,
-        nextModelProfiles
+        nextModelProfiles,
+        nextSystemHealth
       ] = await Promise.all([
         api.getLatestResume(),
         api.listJobs(),
@@ -384,7 +389,8 @@ function App() {
         api.getAgentEvents(),
         api.getModelConfig(),
         api.getModelRoutes(),
-        api.getModelProfiles()
+        api.getModelProfiles(),
+        api.getSystemHealth()
       ]);
       const visibleJobs = filterJobsForActiveSearchRun(nextJobs, lastRun?.id ?? null);
       setResume(nextResume);
@@ -409,6 +415,7 @@ function App() {
       setModelConfig(nextModelConfig);
       setModelRoutes(nextModelRoutes.routes);
       setModelProfiles(nextModelProfiles.profiles);
+      setSystemHealth(nextSystemHealth);
       setModelRouteDrafts(Object.fromEntries(nextModelRoutes.routes.map((route) => [route.agent_name, toModelConfigUpdate(route)])));
       setModelRouteProfileSelections((current) => {
         const fallbackProfileId = nextModelProfiles.profiles[0]?.id ?? "";
@@ -452,6 +459,18 @@ function App() {
     setAnalytics(nextAnalytics);
     setUsage(nextUsage);
     setAgentEvents(nextAgentEvents);
+  }
+
+  async function refreshSystemHealth() {
+    setBusy((current) => ({ ...current, systemHealth: true }));
+    setError(null);
+    try {
+      setSystemHealth(await api.getSystemHealth());
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, systemHealth: false }));
+    }
   }
 
   async function handleSaveModelConfig(event: FormEvent<HTMLFormElement>) {
@@ -1198,6 +1217,49 @@ function App() {
           </button>
         </div>
       ) : null}
+
+      <Panel title="系统状态 / 后端控制台" kicker="System Health">
+        <div className="model-simple-card">
+          <div>
+            <span>总体状态</span>
+            <b>{systemHealth ? systemHealthStatusLabel(systemHealth.status) : busy.boot ? "读取中" : "未读取"}</b>
+            <small>{systemHealth ? `更新时间：${formatDateTime(systemHealth.generated_at)}` : "点击刷新状态读取后端诊断"}</small>
+          </div>
+          <div>
+            <span>下一步</span>
+            <b>{systemHealth?.checks.find((check) => check.status !== "green")?.label ?? "核心状态正常"}</b>
+            <small>{systemHealth?.checks.find((check) => check.status !== "green")?.next_action ?? "可以继续搜索岗位或生成材料"}</small>
+          </div>
+        </div>
+        <div className="session-toolbar">
+          <button type="button" onClick={() => void refreshSystemHealth()} disabled={busy.systemHealth}>
+            {busy.systemHealth ? "刷新中" : "刷新状态"}
+          </button>
+          <button type="button" onClick={() => void handleTestModelConnection()} disabled={busy.modelTest}>
+            {busy.modelTest ? "测试中" : "测试模型"}
+          </button>
+          <button type="button" onClick={() => void handleLaunchCdpBrowser()} disabled={busy.launchCdp}>
+            {busy.launchCdp ? "启动中" : "启动 CDP"}
+          </button>
+          <button type="button" onClick={() => void handleRefreshSessions()} disabled={busy.sessions}>
+            {busy.sessions ? "刷新中" : "刷新平台会话"}
+          </button>
+        </div>
+        <div className="platform-session-grid">
+          {systemHealth ? (
+            systemHealth.checks.map((check) => (
+              <div className={`platform-session state-${check.status}`} key={check.id}>
+                <b>{check.label}</b>
+                <span>{systemHealthStatusLabel(check.status)}</span>
+                <small>{check.summary}</small>
+                {check.next_action ? <small>{check.next_action}</small> : null}
+              </div>
+            ))
+          ) : (
+            <EmptyState title="尚未读取系统状态" text="刷新后会显示后端、数据库、CDP、模型、PDF 和 OCR 状态。" />
+          )}
+        </div>
+      </Panel>
 
       <section className="workspace-grid">
         <div className="stack">
@@ -2444,6 +2506,15 @@ function platformSessionLabel(state: string): string {
     cdp_unreachable: "CDP 不可达"
   };
   return labels[state] ?? state;
+}
+
+function systemHealthStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    green: "正常",
+    yellow: "需要处理",
+    red: "异常"
+  };
+  return labels[status] ?? status;
 }
 
 function formatSelectorCounts(counts: Record<string, number>): string[] {
