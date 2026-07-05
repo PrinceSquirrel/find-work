@@ -14,6 +14,7 @@ import {
   filterJobsForActiveSearchRun,
   getJobDetailQuality,
   shouldShowTailorRetryAction,
+  summarizeDocumentToolChecks,
   summarizeSystemHealthOperation,
   summarizeSystemHealth,
   buildOrchestratorSummary,
@@ -222,6 +223,46 @@ describe("dashboard helpers", () => {
       label: "刷新平台会话失败",
       tone: "danger",
       detail: "CDP 未连接"
+    });
+  });
+
+  it("summarizes PDF and OCR checks from system health", () => {
+    const health: SystemHealthResponse = {
+      status: "yellow",
+      generated_at: "2026-07-06T12:00:00Z",
+      checks: [
+        {
+          id: "pdf_converter",
+          label: "PDF 转换器",
+          status: "green",
+          summary: "Word COM 可用",
+          detail: "可以导出模板化 PDF",
+          next_action: "",
+          metadata: {}
+        },
+        {
+          id: "ocr",
+          label: "OCR 能力",
+          status: "yellow",
+          summary: "OCR 不可用",
+          detail: "图片简历可手动补全文字",
+          next_action: "如需识别截图，请安装 OCR 依赖",
+          metadata: {}
+        }
+      ]
+    };
+
+    expect(summarizeDocumentToolChecks(health)).toEqual({
+      label: "PDF/OCR 需要处理",
+      tone: "warning",
+      detail: "PDF 转换器：Word COM 可用；OCR 能力：OCR 不可用",
+      nextAction: "如需识别截图，请安装 OCR 依赖"
+    });
+    expect(summarizeDocumentToolChecks(null)).toEqual({
+      label: "PDF/OCR 未检查",
+      tone: "muted",
+      detail: "点击检查后会读取 PDF 转换器和 OCR 能力。",
+      nextAction: "先刷新系统状态。"
     });
   });
 

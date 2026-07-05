@@ -1,5 +1,44 @@
 # Codex Recovery Status
 
+## 7H-2D：PDF/OCR 明确检查入口
+### 当前真实状态
+- 系统状态 / 后端控制台现在新增“检查 PDF/OCR”按钮。
+- 点击后会复用 `/api/system/health`，但只聚焦总结 `pdf_converter` 和 `ocr` 两项能力。
+- 最近操作提示会显示 PDF 转换器是否可用、OCR 是否可用，以及下一步建议。
+- 该阶段不新增后端依赖，不改变 PDF/OCR 检测规则，只把已有能力变成用户一眼能点的操作入口。
+
+### 已完成
+- 新增 `summarizeDocumentToolChecks()`，把 PDF 转换器和 OCR 健康卡整理成用户可读结论。
+- 新增单元测试覆盖 PDF 可用、OCR 需处理和未检查状态。
+- `App.tsx` 新增 `handleCheckDocumentTools()`，点击后刷新健康状态并显示 PDF/OCR 操作结果。
+- 控制台操作区新增“检查 PDF/OCR”按钮。
+
+### 未完成
+- 该按钮只检查能力状态，不会实际拿某份简历跑一次 PDF 导出或 OCR 识别。
+- OCR 仍依赖本机可用依赖；缺失时只提示手动补全或安装依赖。
+- 还没有浏览器截图验收。
+
+### 风险
+- `/api/system/health` 的 PDF/OCR 检测仍是能力探测，不代表每一个具体 DOCX 模板都一定能导出成功。
+- 如果后端健康接口没有返回 `pdf_converter` 或 `ocr`，前端会提示后端版本或状态刷新异常。
+
+### 下一步任务
+- 进入 OrchestratorAgent 低风险 LLM 规划输出，或继续把 PDF/OCR 检查升级为“选择一份简历做实际试跑”。
+- 后续继续推进 RAG / Skill Registry / MCP Gateway。
+
+### 最近修改文件
+- `frontend/src/lib/dashboard.ts`
+- `frontend/src/lib/dashboard.test.ts`
+- `frontend/src/App.tsx`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`npm test -- --run src/lib/dashboard.test.ts -t "PDF and OCR"` 先失败于 `summarizeDocumentToolChecks is not a function`。
+- 目标测试：`npm test -- --run src/lib/dashboard.test.ts -t "PDF and OCR"` 通过。
+- 类型检查：`npm run lint` 通过。
+- 前端全量测试：`npm test -- --run` 通过，43 条测试通过。
+- 前端构建：`npm run build` 通过。
+
 ## 7H-2C：控制台操作结果与健康状态自动刷新
 ### 当前真实状态
 - 系统状态 / 后端控制台的四个按钮现在有统一的最近操作提示。

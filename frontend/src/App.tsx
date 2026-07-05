@@ -21,6 +21,7 @@ import {
   getStatusTone,
   rankJobs,
   shouldShowTailorRetryAction,
+  summarizeDocumentToolChecks,
   summarizePlatformConfirmation,
   summarizeSystemHealth,
   summarizeSystemHealthOperation,
@@ -514,6 +515,38 @@ function App() {
     } catch (nextError) {
       setRecentSystemHealthError(toErrorMessage(nextError));
       return false;
+    } finally {
+      setBusy((current) => ({ ...current, systemHealth: false }));
+    }
+  }
+
+  async function handleCheckDocumentTools() {
+    setBusy((current) => ({ ...current, systemHealth: true }));
+    setError(null);
+    setSystemHealthOperation({
+      actionLabel: "检查 PDF/OCR",
+      status: "running",
+      detail: "正在检查模板化 PDF 导出和图片简历 OCR 能力。"
+    });
+    try {
+      const nextHealth = await api.getSystemHealth();
+      setSystemHealth(nextHealth);
+      setRecentSystemHealthError(null);
+      const documentTools = summarizeDocumentToolChecks(nextHealth);
+      setSystemHealthOperation({
+        actionLabel: "检查 PDF/OCR",
+        status: documentTools.tone === "danger" ? "failed" : "success",
+        detail: `${documentTools.label}：${documentTools.detail}。${documentTools.nextAction}`
+      });
+    } catch (nextError) {
+      const message = toErrorMessage(nextError);
+      setRecentSystemHealthError(message);
+      setSystemHealthOperation({
+        actionLabel: "检查 PDF/OCR",
+        status: "failed",
+        detail: message
+      });
+      setError(message);
     } finally {
       setBusy((current) => ({ ...current, systemHealth: false }));
     }
@@ -1336,6 +1369,9 @@ function App() {
         <div className="session-toolbar">
           <button type="button" onClick={() => void refreshSystemHealth()} disabled={busy.systemHealth}>
             {busy.systemHealth ? "刷新中" : "刷新状态"}
+          </button>
+          <button type="button" onClick={() => void handleCheckDocumentTools()} disabled={busy.systemHealth}>
+            {busy.systemHealth ? "检查中" : "检查 PDF/OCR"}
           </button>
           <button type="button" onClick={() => void handleTestModelConnection()} disabled={busy.modelTest}>
             {busy.modelTest ? "测试中" : "测试模型"}

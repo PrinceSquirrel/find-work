@@ -213,6 +213,13 @@ export interface SystemHealthOperationView {
   detail: string;
 }
 
+export interface DocumentToolCheckSummary {
+  label: string;
+  tone: StatusTone;
+  detail: string;
+  nextAction: string;
+}
+
 const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
   discovered: [],
   matched: [],
@@ -338,6 +345,54 @@ export function summarizeSystemHealthOperation(
     label: `${feedback.actionLabel}${meta.suffix}`,
     tone: meta.tone,
     detail: feedback.detail
+  };
+}
+
+export function summarizeDocumentToolChecks(health: SystemHealthResponse | null): DocumentToolCheckSummary {
+  if (!health) {
+    return {
+      label: "PDF/OCR 未检查",
+      tone: "muted",
+      detail: "点击检查后会读取 PDF 转换器和 OCR 能力。",
+      nextAction: "先刷新系统状态。"
+    };
+  }
+
+  const checks = ["pdf_converter", "ocr"]
+    .map((id) => health.checks.find((check) => check.id === id))
+    .filter((check): check is SystemHealthCheck => Boolean(check));
+  if (checks.length === 0) {
+    return {
+      label: "PDF/OCR 未返回状态",
+      tone: "warning",
+      detail: "后端健康接口没有返回 PDF 转换器或 OCR 状态。",
+      nextAction: "请重新刷新系统状态，或检查后端版本。"
+    };
+  }
+
+  const tone = checks.some((check) => check.status === "red")
+    ? "danger"
+    : checks.some((check) => check.status === "yellow")
+      ? "warning"
+      : "success";
+  const labels: Record<StatusTone, string> = {
+    muted: "PDF/OCR 未检查",
+    info: "PDF/OCR 检查中",
+    accent: "PDF/OCR 已检查",
+    success: "PDF/OCR 正常",
+    warning: "PDF/OCR 需要处理",
+    danger: "PDF/OCR 异常"
+  };
+  const detail = checks.map((check) => `${check.label}：${check.summary || check.detail}`).join("；");
+  const nextActions = checks
+    .filter((check) => check.status !== "green" && check.next_action)
+    .map((check) => check.next_action);
+
+  return {
+    label: labels[tone],
+    tone,
+    detail,
+    nextAction: nextActions.length ? nextActions.join("；") : "PDF 转换器和 OCR 状态可用。"
   };
 }
 
