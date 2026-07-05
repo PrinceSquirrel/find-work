@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from time import perf_counter
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from app.schemas import JobPosting, ModelConfig, ResumeDraft
+from app.schemas import JobMatch, JobPosting, ModelConfig, ResumeDraft
+from app.services.llm_prompt_service import LLMPromptService
 
 
 class LLMClientUnavailable(RuntimeError):
@@ -26,6 +28,51 @@ class LLMCompletionResult:
 
 
 class OpenAICompatibleClient:
+    def __init__(self, prompt_service: LLMPromptService | None = None) -> None:
+        self.prompt_service = prompt_service or LLMPromptService()
+
+    def test_connection(self, config: ModelConfig) -> dict[str, object]:
+        api_key = self._api_key(config)
+        payload = {
+            "model": config.model,
+            "messages": [
+                {"role": "system", "content": "You are a connection health check endpoint."},
+                {"role": "user", "content": "Reply with ok."},
+            ],
+            "temperature": 0,
+            "max_tokens": 8,
+        }
+        request = Request(
+            f"{config.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "agent-business/0.1",
+            },
+            method="POST",
+        )
+        started = perf_counter()
+        try:
+            with urlopen(request, timeout=config.timeout_ms / 1000) as response:
+                raw = response.read().decode("utf-8")
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            raise LLMClientUnavailable(f"LLM request failed: {exc.__class__.__name__}") from exc
+        duration_ms = max(1, int((perf_counter() - started) * 1000))
+        try:
+            payload = json.loads(raw)
+            payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise LLMClientUnavailable("LLM response did not contain message content") from exc
+        return {
+            "status": "success",
+            "provider": config.provider,
+            "model": config.model,
+            "duration_ms": duration_ms,
+            "message": "model connection ok",
+        }
+
     def generate_application_materials(
         self,
         config: ModelConfig,
@@ -33,16 +80,13 @@ class OpenAICompatibleClient:
         job: JobPosting,
     ) -> LLMCompletionResult:
         api_key = self._api_key(config)
-        prompt = self._prompt(resume, job)
+        prompt = self.prompt_service.application_writer_user_prompt(resume, job)
         payload = {
             "model": config.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "你是求职材料写作助手。只允许基于用户原始简历改写，"
-                        "不得新增不存在的学校、公司、项目、技能或经历。"
-                    ),
+                    "content": self.prompt_service.application_writer_system_message(),
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -55,6 +99,49 @@ class OpenAICompatibleClient:
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "agent-business/0.1",
+            },
+            method="POST",
+        )
+        started = perf_counter()
+        try:
+            with urlopen(request, timeout=config.timeout_ms / 1000) as response:
+                raw = response.read().decode("utf-8")
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            raise LLMClientUnavailable(f"LLM request failed: {exc.__class__.__name__}") from exc
+        duration_ms = max(1, int((perf_counter() - started) * 1000))
+        return self._parse_response(config, prompt, raw, duration_ms)
+
+    def score_job_matches(
+        self,
+        config: ModelConfig,
+        resume: ResumeDraft,
+        jobs: list[JobPosting],
+        rule_matches: list[JobMatch],
+    ) -> LLMCompletionResult:
+        api_key = self._api_key(config)
+        prompt = self.prompt_service.job_match_user_prompt(resume, jobs, rule_matches)
+        payload = {
+            "model": config.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": self.prompt_service.job_match_system_message(),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        }
+        request = Request(
+            f"{config.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "agent-business/0.1",
             },
             method="POST",
         )
@@ -70,7 +157,7 @@ class OpenAICompatibleClient:
     def _api_key(self, config: ModelConfig) -> str:
         if not config.enabled or config.estimation_only:
             raise LLMClientUnavailable("LLM model config is disabled or estimation-only")
-        api_key = os.getenv(config.api_key_env_var, "")
+        api_key = _env_value(config.api_key_env_var)
         if not api_key:
             raise LLMClientUnavailable(f"API key env var is not configured: {config.api_key_env_var}")
         return api_key
@@ -102,14 +189,32 @@ class OpenAICompatibleClient:
         )
 
     def _prompt(self, resume: ResumeDraft, job: JobPosting) -> str:
-        return (
-            "请输出 JSON，字段必须包含：resume_rewrite、greeting_message、diff_summary、"
-            "resume_risk_flags、greeting_risk_flags、tone。\n"
-            "要求：锁定身份信息和教育经历，不要改姓名、电话、邮箱、头像、年龄、性别、学校、学历或教育时间；"
-            "可以基于原简历事实改写技能、项目、实习、经历描述、自我评价、摘要等简历正文。"
-            "如果岗位要求原简历没有出现的技能、公司、学校、项目事实或证书，只能放入风险提示，不要写入简历正文。"
-            "resume_rewrite 只输出可替换正文，不要输出锁定的身份信息和教育经历。\n\n"
-            f"原简历：\n{resume.raw_text}\n\n"
-            f"岗位：{job.company} / {job.title} / {job.city} / {job.salary}\n"
-            f"JD：\n{job.description}"
-        )
+        return self.prompt_service.application_writer_user_prompt(resume, job)
+
+    def _job_match_prompt(self, resume: ResumeDraft, jobs: list[JobPosting], rule_matches: list[JobMatch]) -> str:
+        return self.prompt_service.job_match_user_prompt(resume, jobs, rule_matches)
+
+
+def _env_value(name: str) -> str:
+    value = os.getenv(name, "")
+    if value:
+        return value
+    for path in _candidate_env_files():
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                key, separator, raw_value = line.partition("=")
+                if not separator or key.strip() != name:
+                    continue
+                return raw_value.strip().strip('"').strip("'")
+        except OSError:
+            continue
+    return ""
+
+
+def _candidate_env_files() -> list[Path]:
+    configured = os.getenv("AGENT_BUSINESS_ENV_FILE", "").strip()
+    if configured:
+        return [Path(configured)]
+    return [Path(r"D:\code\tourism-opinion-agent\.env")]

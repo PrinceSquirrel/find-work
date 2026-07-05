@@ -16,7 +16,7 @@ from app.schemas import (
     ApplicationSyncResponse,
 )
 import app.services.browser_job_extractor_service as browser_job_extractor_service
-from app.services.platform_session_service import PLATFORM_HOSTS
+from app.services.platform_session_service import PLATFORM_HOSTS, resolve_cdp_url
 from app.storage import SQLiteStore
 
 
@@ -30,7 +30,10 @@ class SyncPageItem:
 class ApplicationSyncService:
     def __init__(self, store: SQLiteStore, cdp_url: str | None = None):
         self.store = store
-        self.cdp_url = self._normalize_cdp_url(cdp_url or os.getenv("BROWSER_CDP_URL", ""))
+        self.cdp_url = resolve_cdp_url(
+            cdp_url or os.getenv("BROWSER_CDP_URL", ""),
+            opener=browser_job_extractor_service.urlopen,
+        )
         self.runtime_client = browser_job_extractor_service.CdpRuntimeClient()
 
     def sync(self, platforms: list[str], limit: int) -> ApplicationSyncResponse:

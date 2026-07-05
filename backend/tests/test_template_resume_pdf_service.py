@@ -8,7 +8,8 @@ from PIL import Image
 from pypdf import PdfReader
 from reportlab.pdfgen import canvas
 
-from app.services.pdf_service import DocxProjectTemplateService, TailoredResumePdfService
+from app.services import pdf_service
+from app.services.pdf_service import DocxProjectTemplateService, PdfRenderValidator, TailoredResumePdfService
 
 
 def _docx_with_editable_body_and_image() -> bytes:
@@ -86,3 +87,73 @@ def test_tailored_resume_pdf_service_retries_with_compressed_project_until_one_p
 
     assert len(converter.docx_inputs) == 2
     assert len(PdfReader(BytesIO(pdf_bytes)).pages) == 1
+
+
+def test_pdf_validator_rejects_invalid_pdf_bytes_with_clear_error():
+    validator = PdfRenderValidator()
+
+    try:
+        validator.validate(b"not a pdf", max_pages=1)
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected invalid PDF bytes to fail validation.")
+
+    assert "PDF" in message
+    assert "invalid" in message.lower()
+
+
+def test_pdf_validator_skips_default_renderer_when_wrapper_is_unavailable(monkeypatch):
+    class FailedProbe:
+        returncode = 1
+        stdout = ""
+        stderr = "The system cannot find the path specified."
+
+    monkeypatch.setattr(pdf_service.shutil, "which", lambda name: "pdftoppm.cmd")
+    monkeypatch.setattr(pdf_service.subprocess, "run", lambda *args, **kwargs: FailedProbe())
+
+    assert PdfRenderValidator().validate(_pdf_with_pages(1), max_pages=1) == 1
+
+
+def test_tailored_resume_pdf_service_validates_render_before_returning_pdf():
+    class FakeConverter:
+        def convert(self, docx_bytes: bytes) -> bytes:
+            return _pdf_with_pages(1)
+
+    class RecordingValidator:
+        def __init__(self):
+            self.calls: list[tuple[bytes, int]] = []
+
+        def validate(self, pdf_bytes: bytes, max_pages: int) -> int:
+            self.calls.append((pdf_bytes, max_pages))
+            return 1
+
+    validator = RecordingValidator()
+    service = TailoredResumePdfService(converter=FakeConverter(), validator=validator)
+
+    pdf_bytes = service.render(
+        {"resume_rewrite": "鎶€鑳? Python\n缁忓巻: Agent 宸ヤ綔鍙?"},
+        _docx_with_editable_body_and_image(),
+    )
+
+    assert pdf_bytes.startswith(b"%PDF")
+    assert len(validator.calls) == 1
+    assert validator.calls[0][1] == 1
+
+
+def test_docx_template_missing_editable_body_error_is_not_project_only():
+    document = Document()
+    document.add_paragraph("胡俊")
+    document.add_paragraph("电话: 15822716099")
+    output = BytesIO()
+    document.save(output)
+
+    try:
+        DocxProjectTemplateService().render(output.getvalue(), "技能: Python\n经历: 数据分析")
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected missing editable body to fail clearly.")
+
+    assert "可编辑简历正文" in message
+    assert "项目经历" not in message

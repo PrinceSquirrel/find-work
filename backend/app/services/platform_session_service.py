@@ -15,11 +15,42 @@ PLATFORM_HOSTS = {
     "boss": ["zhipin.com"],
     "shixiseng": ["shixiseng.com"],
 }
+DEFAULT_CDP_HOST = "127.0.0.1:9222"
+
+
+def normalize_cdp_url(value: str | None) -> str | None:
+    value = (value or "").strip().rstrip("/")
+    if not value:
+        return None
+    if value.startswith(("http://", "https://")):
+        return value
+    return f"http://{value}"
+
+
+def resolve_cdp_url(value: str | None, opener=None) -> str | None:
+    explicit_url = normalize_cdp_url(value)
+    if explicit_url:
+        return explicit_url
+
+    default_url = normalize_cdp_url(DEFAULT_CDP_HOST)
+    if default_url and _is_cdp_reachable(default_url, opener=opener):
+        return default_url
+    return None
+
+
+def _is_cdp_reachable(normalized_url: str, opener=None, timeout: int = 1) -> bool:
+    opener = opener or urlopen
+    try:
+        with opener(f"{normalized_url}/json", timeout=timeout) as response:
+            json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return True
 
 
 class PlatformSessionService:
     def __init__(self, cdp_url: str | None = None):
-        self.cdp_url = self._normalize_cdp_url(cdp_url or os.getenv("BROWSER_CDP_URL", ""))
+        self.cdp_url = resolve_cdp_url(cdp_url or os.getenv("BROWSER_CDP_URL", ""))
 
     def inspect(self) -> PlatformSessionsResponse:
         if not self.cdp_url:
@@ -93,12 +124,7 @@ class PlatformSessionService:
         )
 
     def _normalize_cdp_url(self, value: str) -> str | None:
-        value = value.strip().rstrip("/")
-        if not value:
-            return None
-        if value.startswith(("http://", "https://")):
-            return value
-        return f"http://{value}"
+        return normalize_cdp_url(value)
 
 
 class CdpBrowserLauncher:
@@ -108,6 +134,18 @@ class CdpBrowserLauncher:
     ]
 
     def launch(self, port: int = 9222) -> dict[str, object]:
+        existing_cdp_host = self._detect_existing_cdp_host(port)
+        if existing_cdp_host:
+            os.environ["BROWSER_CDP_URL"] = existing_cdp_host
+            return {
+                "status": "reused",
+                "browser": "existing",
+                "cdp_url": existing_cdp_host,
+                "profile_dir": None,
+                "opened_urls": [],
+                "message": "已复用现有 CDP 浏览器。请确认 BOSS/实习僧标签页已登录，然后刷新会话或直接搜索。",
+            }
+
         browser_name, executable = self._find_browser()
         profile_dir = self._profile_dir(browser_name)
         profile_dir.mkdir(parents=True, exist_ok=True)
@@ -130,6 +168,25 @@ class CdpBrowserLauncher:
             "opened_urls": self.default_urls,
             "message": "已启动独立 CDP 浏览器。请在新窗口中登录 BOSS/实习僧，然后回到工作台刷新会话。",
         }
+
+    def _detect_existing_cdp_host(self, port: int) -> str | None:
+        candidates = [os.getenv("BROWSER_CDP_URL", ""), f"127.0.0.1:{port}"]
+        checked: set[str] = set()
+        for candidate in candidates:
+            normalized_url = PlatformSessionService(cdp_url=candidate).cdp_url
+            if not normalized_url or normalized_url in checked:
+                continue
+            checked.add(normalized_url)
+            if self._is_cdp_reachable(normalized_url):
+                return self._host_from_cdp_url(normalized_url)
+        return None
+
+    def _is_cdp_reachable(self, normalized_url: str) -> bool:
+        return _is_cdp_reachable(normalized_url)
+
+    def _host_from_cdp_url(self, normalized_url: str) -> str:
+        parsed = urlparse(normalized_url)
+        return parsed.netloc or normalized_url.replace("http://", "", 1).replace("https://", "", 1)
 
     def _find_browser(self) -> tuple[str, Path]:
         candidates = [

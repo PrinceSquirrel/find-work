@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,19 +10,29 @@ from typing import Any
 
 from app.agents.application_tracker import ApplicationTrackerAgent
 from app.schemas import (
+    AgentModelRoute,
     ApplicationEvent,
+    ApplicationPlatformProof,
     ApplicationRecord,
     ApplicationStatus,
     GreetingMessage,
     JobMatch,
     JobPosting,
+    KnowledgeDocument,
+    KnowledgeReindexResponse,
+    RetrievalHit,
     LLMUsageEntry,
     ModelConfig,
     ModelConfigUpdate,
+    ModelProfile,
+    ModelProfileCreate,
+    ModelProfileUpdate,
     ResumeDraft,
     SearchRun,
     TailoredResume,
 )
+
+MODEL_ROUTE_AGENTS = ("ApplicationWriterAgent", "JobMatchAgent", "ReviewAgent")
 
 
 class SQLiteStore:
@@ -99,7 +110,8 @@ class SQLiteStore:
                     read_at TEXT,
                     replied_at TEXT,
                     progress_stage TEXT NOT NULL,
-                    latest_note TEXT NOT NULL
+                    latest_note TEXT NOT NULL,
+                    platform_proof_json TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE TABLE IF NOT EXISTS application_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,6 +148,34 @@ class SQLiteStore:
                     output_price_per_million REAL NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS agent_model_routes (
+                    agent_name TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    base_url TEXT NOT NULL,
+                    api_key_env_var TEXT NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    estimation_only INTEGER NOT NULL,
+                    timeout_ms INTEGER NOT NULL,
+                    input_price_per_million REAL NOT NULL,
+                    output_price_per_million REAL NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS model_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    base_url TEXT NOT NULL,
+                    api_key_env_var TEXT NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    estimation_only INTEGER NOT NULL,
+                    timeout_ms INTEGER NOT NULL,
+                    input_price_per_million REAL NOT NULL,
+                    output_price_per_million REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS orchestrator_tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task_name TEXT NOT NULL,
@@ -159,12 +199,41 @@ class SQLiteStore:
                     cost_usd REAL NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS knowledge_documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_type TEXT NOT NULL,
+                    source_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    chunk_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(source_type, source_id)
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_chunks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id INTEGER NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_id INTEGER NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(
+                    content,
+                    title,
+                    source_type UNINDEXED,
+                    source_id UNINDEXED,
+                    document_id UNINDEXED,
+                    chunk_id UNINDEXED
+                );
                 """
             )
             self._ensure_llm_usage_columns(conn)
             self._ensure_resume_template_columns(conn)
             self._ensure_tailored_resume_columns(conn)
             self._ensure_job_detail_columns(conn)
+            self._ensure_application_proof_columns(conn)
 
     def _ensure_llm_usage_columns(self, conn: sqlite3.Connection) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_usage)").fetchall()}
@@ -196,6 +265,264 @@ class SQLiteStore:
         if "detail_reason" not in columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN detail_reason TEXT NOT NULL DEFAULT ''")
 
+    def _ensure_application_proof_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(applications)").fetchall()}
+        if "platform_proof_json" not in columns:
+            conn.execute("ALTER TABLE applications ADD COLUMN platform_proof_json TEXT NOT NULL DEFAULT '{}'")
+
+    def reindex_knowledge(self) -> KnowledgeReindexResponse:
+        now = datetime.now(UTC).isoformat()
+        sources = self._knowledge_sources()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM knowledge_chunks_fts")
+            conn.execute("DELETE FROM knowledge_chunks")
+            conn.execute("DELETE FROM knowledge_documents")
+            document_count = 0
+            chunk_count = 0
+            for source in sources:
+                chunks = self._chunk_text(source["content"])
+                if not chunks:
+                    continue
+                cursor = conn.execute(
+                    """
+                    INSERT INTO knowledge_documents (
+                        source_type, source_id, title, summary, chunk_count, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        source["source_type"],
+                        source["source_id"],
+                        source["title"],
+                        source["summary"],
+                        len(chunks),
+                        now,
+                    ),
+                )
+                document_id = int(cursor.lastrowid)
+                document_count += 1
+                for index, content in enumerate(chunks):
+                    chunk_cursor = conn.execute(
+                        """
+                        INSERT INTO knowledge_chunks (
+                            document_id, source_type, source_id, chunk_index,
+                            title, content, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            document_id,
+                            source["source_type"],
+                            source["source_id"],
+                            index,
+                            source["title"],
+                            content,
+                            now,
+                        ),
+                    )
+                    chunk_id = int(chunk_cursor.lastrowid)
+                    conn.execute(
+                        """
+                        INSERT INTO knowledge_chunks_fts (
+                            rowid, content, title, source_type, source_id, document_id, chunk_id
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            chunk_id,
+                            content,
+                            source["title"],
+                            source["source_type"],
+                            str(source["source_id"]),
+                            str(document_id),
+                            str(chunk_id),
+                        ),
+                    )
+                    chunk_count += 1
+        return KnowledgeReindexResponse(status="completed", documents=document_count, chunks=chunk_count)
+
+    def list_knowledge_documents(self) -> list[KnowledgeDocument]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM knowledge_documents
+                ORDER BY updated_at DESC, id DESC
+                """
+            ).fetchall()
+        return [
+            KnowledgeDocument(
+                id=row["id"],
+                source_type=row["source_type"],
+                source_id=row["source_id"],
+                title=row["title"],
+                summary=row["summary"],
+                chunk_count=row["chunk_count"],
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    def query_rag(self, query: str, limit: int = 5) -> list[RetrievalHit]:
+        fts_query = self._fts_query(query)
+        if not fts_query:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    CAST(fts.document_id AS INTEGER) AS document_id,
+                    CAST(fts.chunk_id AS INTEGER) AS chunk_id,
+                    fts.source_type,
+                    CAST(fts.source_id AS INTEGER) AS source_id,
+                    fts.title,
+                    fts.content,
+                    bm25(knowledge_chunks_fts) AS rank
+                FROM knowledge_chunks_fts AS fts
+                WHERE knowledge_chunks_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (fts_query, limit),
+            ).fetchall()
+        return [
+            RetrievalHit(
+                document_id=row["document_id"],
+                chunk_id=row["chunk_id"],
+                source_type=row["source_type"],
+                source_id=row["source_id"],
+                title=row["title"],
+                content=row["content"],
+                score=float(row["rank"]),
+            )
+            for row in rows
+        ]
+
+    def _knowledge_sources(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            resume_rows = conn.execute("SELECT id, filename, raw_text FROM resumes ORDER BY id").fetchall()
+            job_rows = conn.execute(
+                """
+                SELECT id, platform, company, title, city, salary, description, url
+                FROM jobs
+                ORDER BY id
+                """
+            ).fetchall()
+            application_rows = conn.execute(
+                """
+                SELECT id, company, title, platform, current_status, latest_note, platform_proof_json
+                FROM applications
+                ORDER BY id
+                """
+            ).fetchall()
+            tailored_rows = conn.execute(
+                """
+                SELECT tr.id, tr.resume_rewrite, tr.resume_text, tr.greeting_json, j.company, j.title
+                FROM tailored_resumes AS tr
+                LEFT JOIN jobs AS j ON j.id = tr.job_id
+                ORDER BY tr.id
+                """
+            ).fetchall()
+
+        sources: list[dict[str, Any]] = []
+        for row in resume_rows:
+            sources.append(
+                {
+                    "source_type": "resume",
+                    "source_id": row["id"],
+                    "title": f"简历：{row['filename']}",
+                    "summary": self._summary(row["raw_text"]),
+                    "content": row["raw_text"],
+                }
+            )
+        for row in job_rows:
+            content = "\n".join(
+                part
+                for part in [
+                    f"{row['platform']} {row['company']} {row['title']}",
+                    f"{row['city']} {row['salary']}",
+                    row["description"],
+                    row["url"],
+                ]
+                if part
+            )
+            sources.append(
+                {
+                    "source_type": "job",
+                    "source_id": row["id"],
+                    "title": f"岗位：{row['company']} - {row['title']}",
+                    "summary": self._summary(content),
+                    "content": content,
+                }
+            )
+        for row in application_rows:
+            proof = self._safe_json(row["platform_proof_json"])
+            content = "\n".join(
+                part
+                for part in [
+                    f"{row['platform']} {row['company']} {row['title']} {row['current_status']}",
+                    row["latest_note"],
+                    json.dumps(proof, ensure_ascii=False),
+                ]
+                if part
+            )
+            sources.append(
+                {
+                    "source_type": "application",
+                    "source_id": row["id"],
+                    "title": f"投递：{row['company']} - {row['title']}",
+                    "summary": self._summary(content),
+                    "content": content,
+                }
+            )
+        for row in tailored_rows:
+            content = "\n".join(
+                part
+                for part in [
+                    row["resume_rewrite"] or row["resume_text"],
+                    row["greeting_json"],
+                ]
+                if part
+            )
+            if not content.strip():
+                continue
+            title = f"材料：{row['company'] or '未知公司'} - {row['title'] or '未知岗位'}"
+            sources.append(
+                {
+                    "source_type": "tailored_resume",
+                    "source_id": row["id"],
+                    "title": title,
+                    "summary": self._summary(content),
+                    "content": content,
+                }
+            )
+        return sources
+
+    def _chunk_text(self, text: str, size: int = 900) -> list[str]:
+        normalized = "\n".join(line.strip() for line in (text or "").splitlines() if line.strip())
+        if not normalized:
+            return []
+        chunks: list[str] = []
+        start = 0
+        while start < len(normalized):
+            chunks.append(normalized[start : start + size])
+            start += size
+        return chunks
+
+    def _summary(self, text: str, limit: int = 180) -> str:
+        return " ".join((text or "").split())[:limit]
+
+    def _safe_json(self, value: str | None) -> dict[str, Any]:
+        try:
+            payload = json.loads(value or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _fts_query(self, query: str) -> str:
+        terms = re.findall(r"[A-Za-z0-9_+#.-]+|[\u4e00-\u9fff]{2,}", query)
+        safe_terms = [term.replace('"', "") for term in terms[:8] if term.strip()]
+        return " OR ".join(f'"{term}"' for term in safe_terms)
+
     def get_model_config(self) -> ModelConfig:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM model_config WHERE id = 1").fetchone()
@@ -204,8 +531,10 @@ class SQLiteStore:
         return self._model_config_from_row(row)
 
     def save_model_config(self, update: ModelConfigUpdate) -> ModelConfig:
+        update_payload = update.model_dump()
+        update_payload["model"] = _normalize_model_name(update_payload["model"])
         config = ModelConfig(
-            **update.model_dump(),
+            **update_payload,
             api_key_configured=self._is_env_configured(update.api_key_env_var),
             updated_at=datetime.now(UTC),
         )
@@ -245,6 +574,181 @@ class SQLiteStore:
             )
         return config
 
+    def list_model_profiles(self) -> list[ModelProfile]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM model_profiles ORDER BY id").fetchall()
+        return [self._model_profile_from_row(row) for row in rows]
+
+    def create_model_profile(self, update: ModelProfileCreate) -> ModelProfile:
+        now = datetime.now(UTC)
+        update_payload = update.model_dump()
+        update_payload["model"] = _normalize_model_name(update_payload["model"])
+        with self._connect() as conn:
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO model_profiles (
+                        name, provider, model, base_url, api_key_env_var, enabled,
+                        estimation_only, timeout_ms, input_price_per_million,
+                        output_price_per_million, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        update_payload["name"],
+                        update_payload["provider"],
+                        update_payload["model"],
+                        update_payload["base_url"],
+                        update_payload["api_key_env_var"],
+                        1 if update_payload["enabled"] else 0,
+                        1 if update_payload["estimation_only"] else 0,
+                        update_payload["timeout_ms"],
+                        update_payload["input_price_per_million"],
+                        update_payload["output_price_per_million"],
+                        now.isoformat(),
+                        now.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"Model profile already exists: {update.name}") from exc
+            row = conn.execute("SELECT * FROM model_profiles WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        if row is None:
+            raise KeyError("Model profile was not created")
+        return self._model_profile_from_row(row)
+
+    def update_model_profile(self, profile_id: int, update: ModelProfileUpdate) -> ModelProfile:
+        now = datetime.now(UTC)
+        update_payload = update.model_dump()
+        update_payload["model"] = _normalize_model_name(update_payload["model"])
+        with self._connect() as conn:
+            try:
+                cursor = conn.execute(
+                    """
+                    UPDATE model_profiles SET
+                        name = ?,
+                        provider = ?,
+                        model = ?,
+                        base_url = ?,
+                        api_key_env_var = ?,
+                        enabled = ?,
+                        estimation_only = ?,
+                        timeout_ms = ?,
+                        input_price_per_million = ?,
+                        output_price_per_million = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        update_payload["name"],
+                        update_payload["provider"],
+                        update_payload["model"],
+                        update_payload["base_url"],
+                        update_payload["api_key_env_var"],
+                        1 if update_payload["enabled"] else 0,
+                        1 if update_payload["estimation_only"] else 0,
+                        update_payload["timeout_ms"],
+                        update_payload["input_price_per_million"],
+                        update_payload["output_price_per_million"],
+                        now.isoformat(),
+                        profile_id,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"Model profile already exists: {update.name}") from exc
+            if cursor.rowcount == 0:
+                raise KeyError(f"Model profile not found: {profile_id}")
+            row = conn.execute("SELECT * FROM model_profiles WHERE id = ?", (profile_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Model profile not found: {profile_id}")
+        return self._model_profile_from_row(row)
+
+    def delete_model_profile(self, profile_id: int) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM model_profiles WHERE id = ?", (profile_id,))
+        if cursor.rowcount == 0:
+            raise KeyError(f"Model profile not found: {profile_id}")
+
+    def apply_model_profile(self, profile_id: int) -> ModelConfig:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM model_profiles WHERE id = ?", (profile_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Model profile not found: {profile_id}")
+        profile = self._model_profile_from_row(row)
+        return self.save_model_config(
+            ModelConfigUpdate(
+                provider=profile.provider,
+                model=profile.model,
+                base_url=profile.base_url,
+                api_key_env_var=profile.api_key_env_var,
+                enabled=profile.enabled,
+                estimation_only=profile.estimation_only,
+                timeout_ms=profile.timeout_ms,
+                input_price_per_million=profile.input_price_per_million,
+                output_price_per_million=profile.output_price_per_million,
+            )
+        )
+
+    def list_agent_model_routes(self) -> list[AgentModelRoute]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM agent_model_routes").fetchall()
+        stored = {row["agent_name"]: self._agent_model_route_from_row(row) for row in rows}
+        return [stored.get(agent_name) or self._default_agent_model_route(agent_name) for agent_name in MODEL_ROUTE_AGENTS]
+
+    def get_agent_model_route(self, agent_name: str) -> AgentModelRoute:
+        self._validate_model_route_agent(agent_name)
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM agent_model_routes WHERE agent_name = ?", (agent_name,)).fetchone()
+        if row is None:
+            return self._default_agent_model_route(agent_name)
+        return self._agent_model_route_from_row(row)
+
+    def save_agent_model_route(self, agent_name: str, update: ModelConfigUpdate) -> AgentModelRoute:
+        self._validate_model_route_agent(agent_name)
+        update_payload = update.model_dump()
+        update_payload["model"] = _normalize_model_name(update_payload["model"])
+        route = AgentModelRoute(
+            agent_name=agent_name,
+            **update_payload,
+            api_key_configured=self._is_env_configured(update.api_key_env_var),
+            updated_at=datetime.now(UTC),
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_model_routes (
+                    agent_name, provider, model, base_url, api_key_env_var, enabled,
+                    estimation_only, timeout_ms, input_price_per_million,
+                    output_price_per_million, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(agent_name) DO UPDATE SET
+                    provider = excluded.provider,
+                    model = excluded.model,
+                    base_url = excluded.base_url,
+                    api_key_env_var = excluded.api_key_env_var,
+                    enabled = excluded.enabled,
+                    estimation_only = excluded.estimation_only,
+                    timeout_ms = excluded.timeout_ms,
+                    input_price_per_million = excluded.input_price_per_million,
+                    output_price_per_million = excluded.output_price_per_million,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    route.agent_name,
+                    route.provider,
+                    route.model,
+                    route.base_url,
+                    route.api_key_env_var,
+                    1 if route.enabled else 0,
+                    1 if route.estimation_only else 0,
+                    route.timeout_ms,
+                    route.input_price_per_million,
+                    route.output_price_per_million,
+                    route.updated_at.isoformat(),
+                ),
+            )
+        return route
+
     def create_resume(self, resume: ResumeDraft, original_file_bytes: bytes | None = None) -> ResumeDraft:
         with self._connect() as conn:
             cursor = conn.execute(
@@ -261,17 +765,50 @@ class SQLiteStore:
                     json.dumps(resume.profile, ensure_ascii=False),
                     resume.file_type,
                     1 if resume.template_available else 0,
-                    original_file_bytes if resume.template_available else None,
+                    original_file_bytes if self._should_store_resume_file(resume) else None,
                     resume.created_at.isoformat(),
                 ),
             )
             return resume.model_copy(update={"id": cursor.lastrowid})
+
+    def update_resume_manual_text(self, resume: ResumeDraft) -> ResumeDraft:
+        if resume.id is None:
+            raise ValueError("Resume id is required")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE resumes
+                SET raw_text = ?, profile_json = ?
+                WHERE id = ?
+                """,
+                (
+                    resume.raw_text,
+                    json.dumps(resume.profile, ensure_ascii=False),
+                    resume.id,
+                ),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"Resume {resume.id} not found")
+        return self.get_resume(resume.id)
+
+    def _should_store_resume_file(self, resume: ResumeDraft) -> bool:
+        return resume.template_available or resume.file_type in {"png", "jpg", "jpeg"}
 
     def get_resume(self, resume_id: int) -> ResumeDraft:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM resumes WHERE id = ?", (resume_id,)).fetchone()
         if row is None:
             raise KeyError(f"Resume {resume_id} not found")
+        return self._resume_from_row(row)
+
+    def get_latest_resume(self) -> ResumeDraft | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM resumes ORDER BY created_at DESC, id DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        return self._resume_from_row(row)
+
+    def _resume_from_row(self, row: sqlite3.Row) -> ResumeDraft:
         return ResumeDraft(
             id=row["id"],
             filename=row["filename"],
@@ -311,6 +848,21 @@ class SQLiteStore:
                 ),
             )
             return run.model_copy(update={"id": cursor.lastrowid})
+
+    def get_search_run(self, run_id: int) -> SearchRun:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM search_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Search run {run_id} not found")
+        return SearchRun(
+            id=row["id"],
+            resume_id=row["resume_id"],
+            keywords=json.loads(row["keywords_json"]),
+            city=row["city"],
+            platforms=json.loads(row["platforms_json"]),
+            status=row["status"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
 
     def update_search_run_status(self, run_id: int, status: str) -> None:
         with self._connect() as conn:
@@ -390,16 +942,31 @@ class SQLiteStore:
         description: str,
         detail_status: str,
         detail_reason: str,
+        match: JobMatch | None = None,
     ) -> None:
+        match_json = None
+        if match is not None:
+            stored_match = match.model_copy(update={"job_id": job_id})
+            match_json = json.dumps(stored_match.model_dump(mode="json"), ensure_ascii=False)
         with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE jobs
-                SET salary = ?, description = ?, detail_status = ?, detail_reason = ?
-                WHERE id = ?
-                """,
-                (salary, description, detail_status, detail_reason, job_id),
-            )
+            if match_json is None:
+                cursor = conn.execute(
+                    """
+                    UPDATE jobs
+                    SET salary = ?, description = ?, detail_status = ?, detail_reason = ?
+                    WHERE id = ?
+                    """,
+                    (salary, description, detail_status, detail_reason, job_id),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    UPDATE jobs
+                    SET salary = ?, description = ?, detail_status = ?, detail_reason = ?, match_json = ?
+                    WHERE id = ?
+                    """,
+                    (salary, description, detail_status, detail_reason, match_json, job_id),
+                )
         if cursor.rowcount == 0:
             raise KeyError(f"Job {job_id} not found")
 
@@ -462,7 +1029,12 @@ class SQLiteStore:
             "created_at": row["created_at"],
         }
 
-    def create_application(self, job: JobPosting, note: str = "") -> ApplicationRecord:
+    def create_application(
+        self,
+        job: JobPosting,
+        note: str = "",
+        platform_proof: ApplicationPlatformProof | None = None,
+    ) -> ApplicationRecord:
         now = datetime.now(UTC)
         tracker = ApplicationTrackerAgent()
         record = tracker.create_record(
@@ -473,14 +1045,16 @@ class SQLiteStore:
             applied_at=now,
             note=note,
         )
+        if platform_proof is not None:
+            record = record.model_copy(update={"platform_proof": platform_proof})
         with self._connect() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO applications (
                     job_id, company, title, platform, applied_at, current_status,
-                    read_at, replied_at, progress_stage, latest_note
+                    read_at, replied_at, progress_stage, latest_note, platform_proof_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.job_id,
@@ -493,6 +1067,7 @@ class SQLiteStore:
                     record.replied_at.isoformat() if record.replied_at else None,
                     record.progress_stage,
                     record.latest_note,
+                    json.dumps(record.platform_proof.model_dump(mode="json"), ensure_ascii=False),
                 ),
             )
             application_id = cursor.lastrowid
@@ -537,6 +1112,7 @@ class SQLiteStore:
             replied_at=datetime.fromisoformat(row["replied_at"]) if row["replied_at"] else None,
             progress_stage=row["progress_stage"],
             latest_note=row["latest_note"],
+            platform_proof=self._platform_proof_from_json(row["platform_proof_json"]),
             events=events,
         )
 
@@ -729,16 +1305,20 @@ class SQLiteStore:
         return tasks
 
     def _default_model_config(self) -> ModelConfig:
-        api_key_env_var = os.getenv("OPENAI_API_KEY_ENV_VAR", "OPENAI_API_KEY")
+        default_key_env = "DEEPSEEK_API_KEY" if self._env_value("DEEPSEEK_API_KEY") else "OPENAI_API_KEY"
+        api_key_env_var = os.getenv("OPENAI_API_KEY_ENV_VAR", os.getenv("LLM_API_KEY_ENV_VAR", default_key_env))
+        has_api_key = self._is_env_configured(api_key_env_var)
         return ModelConfig(
-            provider=os.getenv("LLM_PROVIDER", "local"),
-            model=os.getenv("OPENAI_MODEL", os.getenv("LLM_USAGE_MODEL", "local-estimator")),
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            provider=os.getenv("LLM_PROVIDER", "openai-compatible" if has_api_key else "local"),
+            model=_normalize_model_name(
+                os.getenv("OPENAI_MODEL", os.getenv("LLM_USAGE_MODEL", "deepseek-v4-pro" if has_api_key else "local-estimator"))
+            ),
+            base_url=os.getenv("OPENAI_BASE_URL", os.getenv("LLM_BASE_URL", "https://api.deepseek.com")),
             api_key_env_var=api_key_env_var,
-            api_key_configured=self._is_env_configured(api_key_env_var),
-            enabled=self._env_bool("LLM_ENABLED", False),
-            estimation_only=self._env_bool("LLM_ESTIMATION_ONLY", True),
-            timeout_ms=self._env_int("LLM_TIMEOUT_MS", 30000),
+            api_key_configured=has_api_key,
+            enabled=self._env_bool("LLM_ENABLED", has_api_key),
+            estimation_only=self._env_bool("LLM_ESTIMATION_ONLY", not has_api_key),
+            timeout_ms=self._env_int("LLM_TIMEOUT_MS", 90000),
             input_price_per_million=self._env_float("LLM_INPUT_PRICE_PER_MILLION", 0.0),
             output_price_per_million=self._env_float("LLM_OUTPUT_PRICE_PER_MILLION", 0.0),
         )
@@ -747,7 +1327,7 @@ class SQLiteStore:
         api_key_env_var = row["api_key_env_var"]
         return ModelConfig(
             provider=row["provider"],
-            model=row["model"],
+            model=_normalize_model_name(row["model"]),
             base_url=row["base_url"],
             api_key_env_var=api_key_env_var,
             api_key_configured=self._is_env_configured(api_key_env_var),
@@ -759,8 +1339,73 @@ class SQLiteStore:
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
 
+    def _model_profile_from_row(self, row: sqlite3.Row) -> ModelProfile:
+        api_key_env_var = row["api_key_env_var"]
+        return ModelProfile(
+            id=row["id"],
+            name=row["name"],
+            provider=row["provider"],
+            model=_normalize_model_name(row["model"]),
+            base_url=row["base_url"],
+            api_key_env_var=api_key_env_var,
+            api_key_configured=self._is_env_configured(api_key_env_var),
+            enabled=bool(row["enabled"]),
+            estimation_only=bool(row["estimation_only"]),
+            timeout_ms=row["timeout_ms"],
+            input_price_per_million=row["input_price_per_million"],
+            output_price_per_million=row["output_price_per_million"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    def _default_agent_model_route(self, agent_name: str) -> AgentModelRoute:
+        self._validate_model_route_agent(agent_name)
+        if agent_name == "ApplicationWriterAgent":
+            return AgentModelRoute(agent_name=agent_name, **self.get_model_config().model_dump())
+        return AgentModelRoute(
+            agent_name=agent_name,
+            provider="local",
+            model="local-rule",
+            base_url="local",
+            api_key_env_var="DEEPSEEK_API_KEY",
+            api_key_configured=self._is_env_configured("DEEPSEEK_API_KEY"),
+            enabled=False,
+            estimation_only=True,
+            timeout_ms=30000,
+            input_price_per_million=0.0,
+            output_price_per_million=0.0,
+            updated_at=datetime.now(UTC),
+        )
+
+    def _agent_model_route_from_row(self, row: sqlite3.Row) -> AgentModelRoute:
+        api_key_env_var = row["api_key_env_var"]
+        return AgentModelRoute(
+            agent_name=row["agent_name"],
+            provider=row["provider"],
+            model=_normalize_model_name(row["model"]),
+            base_url=row["base_url"],
+            api_key_env_var=api_key_env_var,
+            api_key_configured=self._is_env_configured(api_key_env_var),
+            enabled=bool(row["enabled"]),
+            estimation_only=bool(row["estimation_only"]),
+            timeout_ms=row["timeout_ms"],
+            input_price_per_million=row["input_price_per_million"],
+            output_price_per_million=row["output_price_per_million"],
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    def _validate_model_route_agent(self, agent_name: str) -> None:
+        if agent_name not in MODEL_ROUTE_AGENTS:
+            raise ValueError(f"Unsupported model route agent: {agent_name}")
+
     def _is_env_configured(self, name: str) -> bool:
-        return bool(os.getenv(name))
+        return bool(self._env_value(name))
+
+    def _env_value(self, name: str) -> str:
+        value = os.getenv(name, "")
+        if value:
+            return value
+        return _env_file_value(name)
 
     def _env_bool(self, name: str, default: bool) -> bool:
         value = os.getenv(name)
@@ -798,6 +1443,17 @@ class SQLiteStore:
             "match": json.loads(row["match_json"]),
         }
 
+    def _platform_proof_from_json(self, value: str | None) -> ApplicationPlatformProof:
+        if not value:
+            return ApplicationPlatformProof()
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return ApplicationPlatformProof()
+        if not isinstance(payload, dict):
+            return ApplicationPlatformProof()
+        return ApplicationPlatformProof(**payload)
+
     def _orchestrator_task_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "id": row["id"],
@@ -822,3 +1478,35 @@ class SQLiteStore:
             "total_tokens": row["total_tokens"],
             "cost_usd": row["cost_usd"],
         }
+
+
+def _env_file_value(name: str) -> str:
+    for path in _candidate_env_files():
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                key, separator, value = line.partition("=")
+                if not separator or key.strip() != name:
+                    continue
+                return value.strip().strip('"').strip("'")
+        except OSError:
+            continue
+    return ""
+
+
+def _candidate_env_files() -> list[Path]:
+    configured = os.getenv("AGENT_BUSINESS_ENV_FILE", "").strip()
+    if configured:
+        return [Path(configured)]
+    return [Path(r"D:\code\tourism-opinion-agent\.env")]
+
+
+def _normalize_model_name(model: str) -> str:
+    aliases = {
+        "v4pro": "deepseek-v4-pro",
+        "deepseek-v4pro": "deepseek-v4-pro",
+        "v4flash": "deepseek-v4-flash",
+        "deepseek-v4flash": "deepseek-v4-flash",
+    }
+    return aliases.get(model.strip().lower(), model)

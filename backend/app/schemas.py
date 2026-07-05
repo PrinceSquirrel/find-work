@@ -104,6 +104,17 @@ class ApplicationEvent(BaseModel):
     note: str = ""
 
 
+class ApplicationPlatformProof(BaseModel):
+    platform: str = ""
+    source_url: str = ""
+    action: str = ""
+    status: str = ""
+    evidence: str = ""
+    button_text: str = ""
+    confirmed_at: datetime | None = None
+    page_summary: str = ""
+
+
 class ApplicationRecord(BaseModel):
     id: int | None = None
     job_id: int
@@ -116,6 +127,7 @@ class ApplicationRecord(BaseModel):
     replied_at: datetime | None = None
     progress_stage: str = "已投递"
     latest_note: str = ""
+    platform_proof: ApplicationPlatformProof = Field(default_factory=ApplicationPlatformProof)
     events: list[ApplicationEvent] = Field(default_factory=list)
 
 
@@ -167,6 +179,32 @@ class ModelConfigUpdate(BaseModel):
     timeout_ms: int = Field(default=30000, ge=1000, le=300000)
     input_price_per_million: float = Field(default=0.0, ge=0)
     output_price_per_million: float = Field(default=0.0, ge=0)
+
+
+class ModelProfile(ModelConfig):
+    id: int
+    name: str
+    created_at: datetime = Field(default_factory=now_utc)
+
+
+class ModelProfileCreate(ModelConfigUpdate):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class ModelProfileUpdate(ModelConfigUpdate):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class ModelProfilesResponse(BaseModel):
+    profiles: list[ModelProfile]
+
+
+class AgentModelRoute(ModelConfig):
+    agent_name: str
+
+
+class AgentModelRoutesResponse(BaseModel):
+    routes: list[AgentModelRoute]
 
 
 class PlatformSession(BaseModel):
@@ -272,6 +310,104 @@ class ApplicationSyncResponse(BaseModel):
     proposals: list[ApplicationSyncProposal] = Field(default_factory=list)
     diagnostics: list[ApplicationSyncDiagnostic] = Field(default_factory=list)
     message: str = ""
+
+
+class KnowledgeDocument(BaseModel):
+    id: int
+    source_type: str
+    source_id: int
+    title: str
+    summary: str = ""
+    chunk_count: int = 0
+    updated_at: datetime = Field(default_factory=now_utc)
+
+
+class KnowledgeChunk(BaseModel):
+    id: int
+    document_id: int
+    source_type: str
+    source_id: int
+    chunk_index: int
+    title: str
+    content: str
+
+
+class RetrievalHit(BaseModel):
+    document_id: int
+    chunk_id: int
+    source_type: str
+    source_id: int
+    title: str
+    content: str
+    score: float = 0.0
+
+
+class KnowledgeReindexResponse(BaseModel):
+    status: str
+    documents: int
+    chunks: int
+
+
+class RagQueryRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+class RagQueryResponse(BaseModel):
+    query: str
+    answer: str
+    hits: list[RetrievalHit] = Field(default_factory=list)
+
+
+class SkillDefinition(BaseModel):
+    id: str
+    name: str
+    description: str
+    risk_level: str = "low"
+    requires_confirmation: bool = False
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class SkillRunRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    confirmed: bool = False
+
+
+class SkillRunResult(BaseModel):
+    skill_id: str
+    status: str
+    requires_confirmation: bool = False
+    message: str = ""
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class McpServerConfig(BaseModel):
+    id: str
+    command: str
+    args: list[str] = Field(default_factory=list)
+    enabled: bool = False
+    allowed_tools: list[str] = Field(default_factory=list)
+
+
+class McpToolDescriptor(BaseModel):
+    server_id: str
+    name: str
+    description: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class McpToolCallRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    confirmed: bool = False
+
+
+class McpToolCallResult(BaseModel):
+    server_id: str
+    tool_name: str
+    status: str
+    output: dict[str, Any] = Field(default_factory=dict)
+    error: str = ""
+    duration_ms: int = 0
 
 
 class SearchRunRequest(BaseModel):

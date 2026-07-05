@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import ssl
+from html import unescape
 from time import sleep
 from urllib.parse import urlparse
 from urllib.request import urlopen
@@ -17,7 +18,7 @@ from app.schemas import (
     ExtractedJobCandidate,
     PlatformJobExtraction,
 )
-from app.services.platform_session_service import PLATFORM_HOSTS
+from app.services.platform_session_service import PLATFORM_HOSTS, resolve_cdp_url
 
 
 BOSS_CITY_CODES = {
@@ -36,6 +37,20 @@ BOSS_CITY_CODES = {
 }
 
 KNOWN_CITY_NAMES = tuple(BOSS_CITY_CODES.keys())
+BOSS_PRIVATE_DIGIT_TRANSLATION = str.maketrans(
+    {
+        "\ue031": "0",
+        "\ue032": "1",
+        "\ue033": "2",
+        "\ue034": "3",
+        "\ue035": "4",
+        "\ue036": "5",
+        "\ue037": "6",
+        "\ue038": "7",
+        "\ue039": "8",
+        "\ue03a": "9",
+    }
+)
 
 
 class SalaryExtractor:
@@ -51,7 +66,7 @@ class SalaryExtractor:
 
     def extract(self, candidates: list[object]) -> str:
         for candidate in candidates:
-            text = " ".join(str(candidate or "").split())
+            text = " ".join(str(candidate or "").translate(BOSS_PRIVATE_DIGIT_TRANSLATION).split())
             if not text:
                 continue
             match = self.MONEY_PATTERN.search(text)
@@ -67,6 +82,9 @@ class SalaryExtractor:
 
 
 class CdpRuntimeClient:
+    CONNECT_TIMEOUT_SECONDS = 5
+    EVALUATE_TIMEOUT_SECONDS = 30
+
     def evaluate(self, websocket_url: str, expression: str) -> object:
         parsed = urlparse(websocket_url)
         host = parsed.hostname
@@ -77,9 +95,10 @@ class CdpRuntimeClient:
         if parsed.query:
             path = f"{path}?{parsed.query}"
 
-        sock = socket.create_connection((host, port), timeout=3)
+        sock = socket.create_connection((host, port), timeout=self.CONNECT_TIMEOUT_SECONDS)
         if parsed.scheme == "wss":
             sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+        sock.settimeout(self.EVALUATE_TIMEOUT_SECONDS)
         try:
             self._handshake(sock, host, port, path)
             self._send_json(
@@ -175,7 +194,7 @@ class CdpRuntimeClient:
 
 class BrowserJobExtractorService:
     def __init__(self, cdp_url: str | None = None, runtime_client: CdpRuntimeClient | None = None):
-        self.cdp_url = self._normalize_cdp_url(cdp_url or os.getenv("BROWSER_CDP_URL", ""))
+        self.cdp_url = resolve_cdp_url(cdp_url or os.getenv("BROWSER_CDP_URL", ""), opener=urlopen)
         self.runtime_client = runtime_client or CdpRuntimeClient()
         self.salary_extractor = SalaryExtractor()
 
@@ -261,10 +280,83 @@ class BrowserJobExtractorService:
         if not websocket_url:
             raise ValueError(f"The detected {platform} tab has no websocket endpoint.")
         raw_result = self.runtime_client.evaluate(websocket_url, self._detail_refresh_script(platform, url))
-        jobs, _warnings = self._normalize_jobs(platform, [raw_result], 1)
-        if not jobs:
-            raise ValueError("The platform detail page did not return a readable job detail.")
-        return jobs[0]
+        return self._normalize_detail_refresh_result(platform, url, raw_result)
+
+    def apply_to_job(self, platform: str, url: str) -> dict[str, object]:
+        if not self.cdp_url:
+            raise ValueError("BROWSER_CDP_URL is not configured.")
+        hosts = PLATFORM_HOSTS.get(platform)
+        if not hosts:
+            raise ValueError(f"Unsupported platform: {platform}")
+        tabs = self._load_tabs()
+        tab = self._find_platform_tab(tabs, hosts)
+        if tab is None:
+            raise ValueError(f"No detected {platform} tab in the CDP browser.")
+        websocket_url = tab.get("webSocketDebuggerUrl")
+        if not websocket_url:
+            raise ValueError(f"The detected {platform} tab has no websocket endpoint.")
+        try:
+            self.runtime_client.evaluate(websocket_url, self._open_job_script(url))
+            sleep(2.5)
+            raw_result = self.runtime_client.evaluate(websocket_url, self._application_click_script(platform, url))
+        except (OSError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+            return {
+                "confirmed": False,
+                "status": "cdp_failed",
+                "action": "none",
+                "evidence": str(exc),
+                "source_url": self._sanitize_url(url),
+            }
+        if not isinstance(raw_result, dict):
+            return {
+                "confirmed": False,
+                "status": "invalid_cdp_result",
+                "action": "none",
+                "evidence": "platform apply script did not return a structured result",
+                "source_url": self._sanitize_url(url),
+            }
+        raw_result["platform"] = platform
+        raw_result["source_url"] = self._sanitize_url(str(raw_result.get("source_url") or url))
+        return raw_result
+
+    def preview_apply_to_job(self, platform: str, url: str) -> dict[str, object]:
+        if not self.cdp_url:
+            raise ValueError("BROWSER_CDP_URL is not configured.")
+        hosts = PLATFORM_HOSTS.get(platform)
+        if not hosts:
+            raise ValueError(f"Unsupported platform: {platform}")
+        tabs = self._load_tabs()
+        tab = self._find_platform_tab(tabs, hosts)
+        if tab is None:
+            raise ValueError(f"No detected {platform} tab in the CDP browser.")
+        websocket_url = tab.get("webSocketDebuggerUrl")
+        if not websocket_url:
+            raise ValueError(f"The detected {platform} tab has no websocket endpoint.")
+        try:
+            self.runtime_client.evaluate(websocket_url, self._open_job_script(url))
+            sleep(2.5)
+            raw_result = self.runtime_client.evaluate(websocket_url, self._application_preview_script(platform, url))
+        except (OSError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+            return {
+                "ready": False,
+                "status": "cdp_failed",
+                "action": "preview",
+                "button_text": "",
+                "evidence": str(exc),
+                "source_url": self._sanitize_url(url),
+            }
+        if not isinstance(raw_result, dict):
+            return {
+                "ready": False,
+                "status": "invalid_cdp_result",
+                "action": "preview",
+                "button_text": "",
+                "evidence": "platform preview script did not return a structured result",
+                "source_url": self._sanitize_url(url),
+            }
+        raw_result["platform"] = platform
+        raw_result["source_url"] = self._sanitize_url(str(raw_result.get("source_url") or url))
+        return raw_result
 
     def _load_tabs(self) -> list[dict[str, str]]:
         with urlopen(f"{self.cdp_url}/json", timeout=2) as response:
@@ -397,6 +489,9 @@ class BrowserJobExtractorService:
             description = self._best_description(raw)
             if not title and not description:
                 continue
+            if self._is_non_job_candidate(platform, raw, title, description):
+                warnings.append(f"dropped non-job candidate #{index}: {title or 'untitled'}")
+                continue
             if title and self._is_untrusted_text(title):
                 warnings.append(f"dropped polluted job #{index}: title is unreadable")
                 continue
@@ -404,7 +499,13 @@ class BrowserJobExtractorService:
                 warnings.append(f"dropped polluted job #{index}: title and description are unreadable")
                 continue
             company = self._trusted_field(raw.get("company", ""), "company", warnings, index)
-            city = self._trusted_field(raw.get("city", ""), "city", warnings, index, fallback="城市未展示")
+            if self._is_unknown_company(company):
+                company = self._infer_company(raw) or company
+            city = self._trusted_field(raw.get("city", ""), "city", warnings, index)
+            if not city:
+                city = self._infer_city(raw)
+            if not city:
+                city = "城市未展示"
             salary = self._extract_salary(raw)
             if not salary:
                 salary = "薪资读取失败"
@@ -427,6 +528,30 @@ class BrowserJobExtractorService:
                 break
         return jobs, warnings
 
+    def _is_non_job_candidate(
+        self,
+        platform: str,
+        raw: dict[str, object],
+        title: str,
+        description: str,
+    ) -> bool:
+        if platform != "boss":
+            return False
+        company = self._clean(raw.get("company", ""))
+        url = self._clean(raw.get("url", ""))
+        combined = " ".join(part for part in (title, company, description) if part)
+        if title in {"职位搜索", "岗位搜索", "职位"}:
+            return True
+        if title == "职位搜索" and company in {"加载中", "BOSS直聘APP"}:
+            return True
+        if "BOSS直聘APP" in company and ("搜索" in title or "工作区域" in combined):
+            return True
+        nav_markers = ("首页", "职位", "公司", "校园", "海归", "APP", "海外")
+        if "搜索" in title and sum(1 for marker in nav_markers if marker in combined) >= 4:
+            return True
+        has_job_detail_url = "/job_detail" in url or "job_detail" in url
+        return not has_job_detail_url and company in {"加载中", "BOSS直聘APP"}
+
     def _city_matches(self, candidate_city: str, requested_city: str) -> bool:
         candidate = self._clean(candidate_city)
         requested = self._clean(requested_city)
@@ -437,6 +562,26 @@ class BrowserJobExtractorService:
         if any(city in candidate for city in KNOWN_CITY_NAMES):
             return False
         return True
+
+    def _infer_city(self, raw: dict[str, object]) -> str:
+        values: list[object] = [
+            raw.get("title", ""),
+            raw.get("company", ""),
+            raw.get("description", ""),
+            raw.get("detail_description", ""),
+        ]
+        for key in ("salary_candidates", "detail_salary_candidates"):
+            candidates = raw.get(key, [])
+            if isinstance(candidates, list):
+                values.extend(candidates)
+        for value in values:
+            text = self._clean(value)
+            if not text:
+                continue
+            for city in KNOWN_CITY_NAMES:
+                if city and city in text:
+                    return city
+        return ""
 
     def _extract_salary(self, raw: dict[str, object]) -> str:
         candidates: list[object] = []
@@ -454,6 +599,154 @@ class BrowserJobExtractorService:
         )
         return self.salary_extractor.extract(candidates)
 
+    def _is_unknown_company(self, company: str) -> bool:
+        normalized = self._clean(company)
+        return not normalized or normalized in {"未知公司", "公司未展示"}
+
+    def _infer_company(self, raw: dict[str, object]) -> str:
+        title = self._clean(raw.get("title", ""))
+        values: list[object] = []
+        for key in ("company_candidates", "salary_candidates", "detail_salary_candidates"):
+            candidates = raw.get(key, [])
+            if isinstance(candidates, list):
+                values.extend(candidates)
+        values.extend([raw.get("description", ""), raw.get("detail_description", "")])
+
+        for value in values:
+            text = self._clean(value)
+            if not text or self._is_untrusted_text(text):
+                continue
+            candidate_area = text
+            if title and title in candidate_area:
+                candidate_area = candidate_area.split(title, 1)[1]
+            for city in KNOWN_CITY_NAMES:
+                city_index = candidate_area.find(city)
+                if city_index > 0:
+                    candidate_area = candidate_area[:city_index]
+                    break
+            for part in re.split(r"[·•|｜,，]+|\s+", candidate_area.strip(" -—:：")):
+                candidate = part.strip(" -—:：")
+                if self._is_likely_company_name(candidate):
+                    return candidate
+        return ""
+
+    def _is_likely_company_name(self, candidate: str) -> bool:
+        if len(candidate) < 2 or len(candidate) > 30:
+            return False
+        if self._is_unknown_company(candidate) or self._is_untrusted_text(candidate):
+            return False
+        if any(city in candidate for city in KNOWN_CITY_NAMES):
+            return False
+        blocked_fragments = (
+            "岗位",
+            "职位",
+            "要求",
+            "薪资",
+            "经验",
+            "本科",
+            "硕士",
+            "博士",
+            "大专",
+            "不限",
+            "医疗",
+            "健康",
+            "制药",
+            "生物",
+            "互联网",
+            "金融",
+        )
+        return not any(fragment in candidate for fragment in blocked_fragments)
+
+    def _normalize_detail_refresh_result(
+        self,
+        platform: str,
+        url: str,
+        raw_result: object,
+    ) -> ExtractedJobCandidate:
+        raw = raw_result if isinstance(raw_result, dict) else {}
+        if isinstance(raw.get("html"), str):
+            raw = self._detail_payload_from_html(platform, url, str(raw["html"]))
+        else:
+            raw = {**raw, "url": self._clean(raw.get("url", "")) or url}
+        jobs, _warnings = self._normalize_jobs(platform, [raw], 1)
+        if not jobs:
+            raise ValueError("The platform detail page did not return a readable job detail.")
+        return jobs[0]
+
+    def _detail_payload_from_html(self, platform: str, url: str, html: str) -> dict[str, object]:
+        description = self._html_detail_text(html)
+        body_text = self._html_to_text(html)
+        detail_status = "detail_fetched" if description else "low_quality"
+        return {
+            "title": self._html_first_text(html, ("job-name", "job-title", "position-name", "position-title", "title")),
+            "company": self._html_first_text(html, ("company-name", "company-title", "com-name", "company")),
+            "city": self._html_first_text(html, ("job-area", "area", "city", "location", "address")),
+            "salary": self._html_first_text(html, ("job-salary", "salary", "wage", "money")),
+            "salary_candidates": [body_text, description],
+            "detail_description": description,
+            "description": description or body_text,
+            "url": url,
+            "job_type": "boss_browser" if platform == "boss" else "shixiseng_browser",
+            "detail_status": detail_status,
+            "detail_reason": (
+                "Detail page HTML regression sample parsed."
+                if detail_status == "detail_fetched"
+                else "Detail page HTML was readable, but no JD block was found."
+            ),
+        }
+
+    def _html_first_text(self, html: str, class_keywords: tuple[str, ...]) -> str:
+        for value in self._html_texts_by_class(html, class_keywords):
+            if value:
+                return value
+        return ""
+
+    def _html_detail_text(self, html: str) -> str:
+        values = self._html_texts_by_class(
+            html,
+            (
+                "job-sec-text",
+                "job-detail-content",
+                "job-detail-section",
+                "job-detail",
+                "detail-content",
+                "detail-section",
+                "job-description",
+                "position-detail",
+                "description",
+                "detail",
+            ),
+        )
+        detail_markers = ("职位描述", "岗位职责", "任职要求", "工作内容", "岗位要求", "Responsibilities", "Requirements")
+        marked_values = [value for value in values if any(marker in value for marker in detail_markers)]
+        candidates = marked_values or values
+        if candidates:
+            return max(candidates, key=len)[:3000]
+        body_text = self._html_to_text(html)
+        if any(marker in body_text for marker in detail_markers):
+            return body_text[:3000]
+        return ""
+
+    def _html_texts_by_class(self, html: str, class_keywords: tuple[str, ...]) -> list[str]:
+        values: list[str] = []
+        for keyword in class_keywords:
+            pattern = re.compile(
+                r"<(?P<tag>[a-zA-Z0-9]+)\b[^>]*class=[\"'][^\"']*"
+                + re.escape(keyword)
+                + r"[^\"']*[\"'][^>]*>(?P<body>.*?)</(?P=tag)>",
+                re.IGNORECASE | re.DOTALL,
+            )
+            for match in pattern.finditer(html):
+                text = self._html_to_text(match.group("body"))
+                if text:
+                    values.append(text)
+        return list(dict.fromkeys(values))
+
+    def _html_to_text(self, html: str) -> str:
+        without_scripts = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", html, flags=re.IGNORECASE | re.DOTALL)
+        without_tags = re.sub(r"<[^>]+>", " ", without_scripts)
+        return self._clean(unescape(without_tags))
+
     def _best_description(self, raw: dict[str, object]) -> str:
         card_description = self._clean(raw.get("description", ""))
         detail_description = self._clean(raw.get("detail_description", ""))
@@ -461,26 +754,57 @@ class BrowserJobExtractorService:
             return detail_description
         if card_description and not self._is_untrusted_text(card_description):
             return card_description
-        if detail_description and not self._is_untrusted_text(detail_description):
+        if (
+            detail_description
+            and not self._is_untrusted_text(detail_description)
+            and not self._is_loading_or_script_text(detail_description)
+        ):
             return detail_description
         return ""
 
     def _is_better_detail_description(self, detail_description: str, card_description: str) -> bool:
-        if not detail_description or self._is_untrusted_text(detail_description):
+        if (
+            not detail_description
+            or self._is_untrusted_text(detail_description)
+            or self._is_loading_or_script_text(detail_description)
+        ):
             return False
         detail_markers = ("职位描述", "岗位职责", "任职要求", "工作内容", "岗位要求", "Responsibilities", "Requirements")
         if any(marker in detail_description for marker in detail_markers) and len(detail_description) > len(card_description):
             return True
         return len(detail_description) >= max(120, len(card_description) + 40)
 
+    def _is_loading_or_script_text(self, value: str) -> bool:
+        cleaned = self._clean(value)
+        if not cleaned:
+            return False
+        markers = (
+            "BOSS\u6b63\u5728\u52a0\u8f7d\u4e2d",
+            "function getCookie",
+            "window.Promise",
+            "var staticPath",
+            "webpack",
+            "京ICP",
+        )
+        return any(marker in cleaned for marker in markers)
+
     def _detail_diagnostics(self, raw: dict[str, object], description: str) -> tuple[str, str]:
         explicit_status = self._clean(raw.get("detail_status", ""))
         explicit_reason = self._clean(raw.get("detail_reason", ""))
-        if explicit_status:
-            return explicit_status, explicit_reason or self._default_detail_reason(explicit_status)
-
         card_description = self._clean(raw.get("description", ""))
         detail_description = self._clean(raw.get("detail_description", ""))
+        if explicit_status:
+            if explicit_status == "detail_fetched" and detail_description and description == detail_description:
+                return explicit_status, explicit_reason or self._default_detail_reason(explicit_status)
+            if explicit_status == "detail_fetched" and (
+                self._is_loading_or_script_text(detail_description)
+                or not self._is_better_detail_description(detail_description, card_description)
+            ):
+                if card_description and description == card_description:
+                    return "card_only", self._default_detail_reason("card_only")
+                return "low_quality", self._default_detail_reason("low_quality")
+            return explicit_status, explicit_reason or self._default_detail_reason(explicit_status)
+
         if self._is_better_detail_description(detail_description, card_description):
             return "detail_fetched", "详情页已补全岗位要求。"
         if detail_description and not self._is_untrusted_text(detail_description):
@@ -604,6 +928,137 @@ class BrowserJobExtractorService:
             return f"https://www.shixiseng.com/interns?{query}"
         return "about:blank"
 
+    def _open_job_script(self, url: str) -> str:
+        return f"""
+(() => {{
+  const targetUrl = {json.dumps(url, ensure_ascii=False)};
+  if (!targetUrl) return {{ opened: false, reason: "missing job url" }};
+  try {{
+    location.href = targetUrl;
+    return {{ opened: true, url: targetUrl }};
+  }} catch (error) {{
+    return {{ opened: false, reason: String(error) }};
+  }}
+}})()
+"""
+
+    def _application_preview_script(self, platform: str, url: str) -> str:
+        return f"""
+(async () => {{
+  const platform = {json.dumps(platform)};
+  const targetUrl = {json.dumps(url, ensure_ascii=False)};
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const text = (node) => (node?.innerText || node?.textContent || "").replace(/\\s+/g, " ").trim();
+  const absolute = (href) => {{
+    try {{ return new URL(href || location.href, location.href).href; }} catch (_) {{ return href || location.href; }}
+  }};
+  const respond = (ready, status, action, evidence, buttonText = "") => ({{
+    ready,
+    status,
+    action,
+    evidence,
+    button_text: buttonText,
+    source_url: absolute(location.href || targetUrl)
+  }});
+  const bodyText = () => text(document.body).slice(0, 8000);
+  const alreadyPattern = /已沟通|继续沟通|已投递|已申请|已报名|沟通中|投递成功|申请成功|已发送/i;
+  const blockerPattern = /验证码|安全验证|请先登录|登录后|登录\\/注册|实名认证|绑定手机|异常访问/i;
+  const applyPattern = platform === "boss"
+    ? /立即沟通|继续沟通|投递简历|申请职位|立即申请|开聊|沟通/i
+    : /投递简历|立即投递|申请职位|立即申请|报名|沟通/i;
+  const labelFor = (node) => {{
+    const pieces = [
+      text(node),
+      node?.getAttribute?.("aria-label") || "",
+      node?.getAttribute?.("title") || "",
+      node?.getAttribute?.("data-title") || "",
+      node?.getAttribute?.("data-text") || "",
+      node?.value || "",
+      ...Object.values(node?.dataset || {{}})
+    ];
+    return pieces.join(" ").replace(/\\s+/g, " ").trim();
+  }};
+  await sleep(800);
+  const pageText = bodyText();
+  if (blockerPattern.test(pageText)) {{
+    return respond(false, "blocked_by_platform", "preview", "platform requires login, captcha, or safety verification");
+  }}
+  if (alreadyPattern.test(pageText)) {{
+    return respond(true, "already_applied", "already_confirmed", "platform page already shows applied/contacted state");
+  }}
+  const nodes = Array.from(document.querySelectorAll("button,a,[role='button'],.btn,[class*='btn'],[class*='button']"));
+  for (const node of nodes) {{
+    const label = labelFor(node);
+    const disabled = node.disabled || node.getAttribute("aria-disabled") === "true" || /disabled/.test(String(node.className || ""));
+    const visible = node.offsetParent !== null || node.getClientRects().length > 0;
+    if (!label || disabled || !visible || label.length > 120 || !applyPattern.test(label)) continue;
+    return respond(true, "ready", "preview", `found platform button: ${{label}}`, label);
+  }}
+  const chatInput = document.querySelector("textarea,[contenteditable='true'],.chat-input,[class*='chat-input'],[class*='message-input']");
+  if (chatInput) {{
+    return respond(true, "ready", "preview", "chat/apply panel is already open", "chat/input");
+  }}
+  return respond(false, "button_not_found", "preview", "no platform apply or chat button was found");
+}})()
+"""
+
+    def _application_click_script(self, platform: str, url: str) -> str:
+        return f"""
+(async () => {{
+  const platform = {json.dumps(platform)};
+  const targetUrl = {json.dumps(url, ensure_ascii=False)};
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const text = (node) => (node?.innerText || node?.textContent || "").replace(/\\s+/g, " ").trim();
+  const absolute = (href) => {{
+    try {{ return new URL(href || location.href, location.href).href; }} catch (_) {{ return href || location.href; }}
+  }};
+  const respond = (confirmed, status, action, evidence) => ({{
+    confirmed,
+    status,
+    action,
+    evidence,
+    source_url: absolute(location.href || targetUrl)
+  }});
+  const bodyText = () => text(document.body).slice(0, 6000);
+  const alreadyPattern = /已沟通|继续沟通|已投递|已申请|已报名|沟通中|投递成功|申请成功|已发送/i;
+  const blockerPattern = /验证码|安全验证|请先登录|登录后|登录\\/注册|实名认证|绑定手机|异常访问/i;
+  const applyPattern = platform === "boss"
+    ? /立即沟通|继续沟通|投递简历|申请职位|立即申请|开聊|沟通/i
+    : /投递简历|立即投递|申请职位|立即申请|报名|沟通/i;
+  await sleep(800);
+  let pageText = bodyText();
+  if (blockerPattern.test(pageText)) {{
+    return respond(false, "blocked_by_platform", "none", "platform requires login, captcha, or safety verification");
+  }}
+  if (alreadyPattern.test(pageText)) {{
+    return respond(true, "already_applied", "already_confirmed", "platform page already shows applied/contacted state");
+  }}
+  const nodes = Array.from(document.querySelectorAll("button,a,[role='button'],.btn,[class*='btn'],[class*='button']"));
+  for (const node of nodes) {{
+    const label = text(node);
+    const disabled = node.disabled || node.getAttribute("aria-disabled") === "true" || /disabled/.test(node.className || "");
+    const visible = node.offsetParent !== null || node.getClientRects().length > 0;
+    if (!label || disabled || !visible || !applyPattern.test(label)) continue;
+    node.scrollIntoView?.({{ block: "center", inline: "center" }});
+    node.click();
+    await sleep(1200);
+    pageText = bodyText();
+    if (blockerPattern.test(pageText)) {{
+      return respond(false, "clicked_but_blocked", "clicked_apply", `clicked "${{label}}", but platform requires verification`);
+    }}
+    if (alreadyPattern.test(pageText)) {{
+      return respond(true, "applied", "clicked_apply", `clicked platform button: ${{label}}`);
+    }}
+    const chatInput = document.querySelector("textarea,[contenteditable='true'],.chat-input,[class*='chat-input'],[class*='message-input']");
+    if (chatInput) {{
+      return respond(true, "applied", "clicked_apply", `clicked platform button and opened chat/apply panel: ${{label}}`);
+    }}
+    return respond(false, "clicked_unconfirmed", "clicked_apply", `clicked "${{label}}", but platform did not show applied/contacted state`);
+  }}
+  return respond(false, "button_not_found", "none", "no platform apply or chat button was found");
+}})()
+"""
+
     def _detail_refresh_script(self, platform: str, url: str) -> str:
         return f"""
 (async () => {{
@@ -633,6 +1088,8 @@ class BrowserJobExtractorService:
     "[class*='position-title']"
   ];
   const companySelectors = [
+    ".boss-name",
+    ".boss-info .boss-name",
     ".company-name",
     ".company",
     ".com-name",
@@ -641,6 +1098,7 @@ class BrowserJobExtractorService:
     "[class*='com-name']"
   ];
   const citySelectors = [
+    ".company-location",
     ".job-area",
     ".area",
     ".city",
@@ -674,6 +1132,7 @@ class BrowserJobExtractorService:
     "[class*='description']",
     "[class*='detail']"
   ];
+  const isLoadingShellText = (value) => /BOSS\u6b63\u5728\u52a0\u8f7d\u4e2d|function getCookie|window\.Promise|var staticPath|webpack|ICP/i.test(value || "");
   const detailKeywordPattern = /职位描述|岗位职责|任职要求|工作内容|岗位要求|Responsibilities|Requirements|Job Description/i;
   const collectCandidates = (root, selectors) => {{
     const values = [];
@@ -709,7 +1168,8 @@ class BrowserJobExtractorService:
     }}
     const uniqueValues = [...new Set(values)].sort((left, right) => right.length - left.length);
     const picked = uniqueValues.find((value) => value.length > 80) || uniqueValues[0] || text(doc.body);
-    return (picked || "").slice(0, 3000);
+    const result = (picked || "").slice(0, 3000);
+    return isLoadingShellText(result) ? "" : result;
   }};
   const blocked = (reason) => ({{
     title: targetUrl,
@@ -811,14 +1271,26 @@ class BrowserJobExtractorService:
   const selectors = platform === "boss"
     ? [
         ".job-card-wrapper",
+        ".job-card-wrap",
         ".job-card-box",
+        ".job-card-body",
+        ".job-card-container",
         ".job-list-box li",
+        ".search-job-result li",
+        ".job-list-wrapper li",
+        ".rec-job-list li",
         ".job-primary",
         ".job-card-left",
         "[class*='job-card']",
+        "[class*='jobCard']",
+        "[class*='JobCard']",
         "[class*='job-list'] li",
         "[class*='job-list'] [class*='item']",
+        "[class*='jobList'] [class*='item']",
+        "[class*='JobList'] [class*='item']",
         "[class*='search-job']",
+        "[class*='searchJob']",
+        "[class*='SearchJob']",
         "[ka*='search_list']",
         "[data-jobid]",
         "[data-job-id]",
@@ -856,7 +1328,10 @@ class BrowserJobExtractorService:
     "div[class*='card']"
   ].join(",");
   const cards = [];
+  const cardSnapshots = [];
   const seenCards = new Set();
+  const seenCardKeys = new Set();
+  const seenSnapshotKeys = new Set();
   const matchedSelectorCounts = {{}};
   const countCandidateNodes = () => selectors.reduce((total, selector) => total + document.querySelectorAll(selector).length, 0);
   const waitForCandidateCards = async () => {{
@@ -866,25 +1341,109 @@ class BrowserJobExtractorService:
     }}
     return false;
   }};
-  await waitForCandidateCards();
-  const pushCard = (node) => {{
-    const card = node.closest?.(cardRootSelector) || node;
-    if (!seenCards.has(card)) {{
-      seenCards.add(card);
-      cards.push(card);
-    }}
-  }};
-  for (const selector of selectors) {{
-    const nodes = Array.from(document.querySelectorAll(selector));
-    matchedSelectorCounts[selector] = nodes.length;
-    for (const node of nodes) pushCard(node);
-  }}
   const fallbackLinkSelector = platform === "boss"
     ? "a[href*='job_detail'],a[href*='/job_detail/']"
     : "a[href*='intern'],a[href*='/intern/'],a[href*='job']";
-  const fallbackLinks = Array.from(document.querySelectorAll(fallbackLinkSelector));
-  matchedSelectorCounts.fallback_links = fallbackLinks.length;
-  for (const link of fallbackLinks) pushCard(link);
+  const hasSalaryText = (value) => {{
+    salaryRegex.lastIndex = 0;
+    return salaryRegex.test(value || "");
+  }};
+  const bossCardRootFromLink = (link) => {{
+    if (platform !== "boss" || !link) return link;
+    let current = link;
+    let best = link;
+    for (let depth = 0; current && depth < 8; depth += 1) {{
+      const value = text(current);
+      const hasJobLink = Boolean(current.querySelector?.(fallbackLinkSelector)) || current.matches?.(fallbackLinkSelector);
+      const hasSalary = hasSalaryText(value) || Boolean(current.querySelector?.(".salary,.job-salary,.red,[class*='salary'],[class*='wage']"));
+      const hasCompany = Boolean(current.querySelector?.(".boss-name,.company-name,.company-text,.company,[class*='company'],[class*='com-name']"));
+      const usefulSize = value.length >= 18 && value.length <= 1600;
+      if (usefulSize && hasJobLink && (hasSalary || hasCompany)) {{
+        best = current;
+        break;
+      }}
+      current = current.parentElement;
+    }}
+    return best || link;
+  }};
+  const cardKey = (card) => {{
+    const link = card.matches?.(fallbackLinkSelector) ? card : card.querySelector?.(fallbackLinkSelector) || card.querySelector?.("a[href]");
+    const href = absolute(link?.getAttribute?.("href") || "");
+    return href || text(card).slice(0, 240);
+  }};
+  const snapshotKey = (payload) => payload.url || (payload.description || "").slice(0, 240);
+  const snapshotCandidateCard = (card) => {{
+    const link = card.matches?.(fallbackLinkSelector) ? card : card.querySelector?.(fallbackLinkSelector) || card.querySelector?.("a[href]");
+    const description = text(card).slice(0, 1200);
+    const url = absolute(link?.getAttribute?.("href") || "");
+    return {{
+      title: text(link) || description.slice(0, 80),
+      company: "",
+      company_candidates: [description],
+      city: "",
+      salary: "",
+      salary_candidates: [description],
+      detail_description: "",
+      detail_status: "card_snapshot",
+      detail_reason: "滚动过程中已保存岗位卡片快照，避免虚拟列表复用 DOM 节点导致漏抓。",
+      detail_salary_candidates: [],
+      description,
+      url,
+      job_type: platform === "boss" ? "boss_browser" : "shixiseng_browser"
+    }};
+  }};
+  const pushCard = (node) => {{
+    const recovered = platform === "boss" && node.matches?.(fallbackLinkSelector) ? bossCardRootFromLink(node) : null;
+    const card = recovered || node.closest?.(cardRootSelector) || node;
+    const key = cardKey(card);
+    if (!seenCards.has(card) && (!key || !seenCardKeys.has(key))) {{
+      seenCards.add(card);
+      if (key) seenCardKeys.add(key);
+      cards.push(card);
+      const snapshot = snapshotCandidateCard(card);
+      const keyForSnapshot = snapshotKey(snapshot);
+      if (snapshot.description && (!keyForSnapshot || !seenSnapshotKeys.has(keyForSnapshot))) {{
+        if (keyForSnapshot) seenSnapshotKeys.add(keyForSnapshot);
+        cardSnapshots.push(snapshot);
+      }}
+    }}
+  }};
+  const collectCandidateCards = () => {{
+    for (const selector of selectors) {{
+      const nodes = Array.from(document.querySelectorAll(selector));
+      matchedSelectorCounts[selector] = Math.max(matchedSelectorCounts[selector] || 0, nodes.length);
+      for (const node of nodes) pushCard(node);
+    }}
+    const fallbackLinks = Array.from(document.querySelectorAll(fallbackLinkSelector));
+    matchedSelectorCounts.fallback_links = Math.max(matchedSelectorCounts.fallback_links || 0, fallbackLinks.length);
+    for (const link of fallbackLinks) pushCard(link);
+  }};
+  const scrollForMoreCards = async () => {{
+    if (platform !== "boss") return;
+    const scrollContainers = [
+      document.scrollingElement,
+      document.documentElement,
+      document.body,
+      ...Array.from(document.querySelectorAll("[class*='job-list'],[class*='jobList'],[class*='search-job'],[class*='searchJob'],[class*='list'],[class*='scroll']"))
+    ].filter(Boolean);
+    for (let round = 0; round < 4 && cards.length < limit; round += 1) {{
+      collectCandidateCards();
+      for (const scroller of scrollContainers) {{
+        const maxTop = Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0));
+        const currentTop = scroller.scrollTop || 0;
+        if (maxTop > currentTop + 20) {{
+          scroller.scrollTop = Math.min(maxTop, currentTop + 900);
+        }}
+      }}
+      window.scrollBy?.(0, 900);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }}
+    collectCandidateCards();
+  }};
+  await waitForCandidateCards();
+  collectCandidateCards();
+  await scrollForMoreCards();
+  collectCandidateCards();
   const titleSelectors = [
     ".job-name",
     ".job-title",
@@ -898,6 +1457,8 @@ class BrowserJobExtractorService:
     "[class*='position-title']"
   ];
   const companySelectors = [
+    ".boss-name",
+    ".boss-info .boss-name",
     ".company-name",
     ".company-text",
     ".com-name",
@@ -907,6 +1468,7 @@ class BrowserJobExtractorService:
     "[class*='com-name']"
   ];
   const citySelectors = [
+    ".company-location",
     ".job-area",
     ".area",
     ".city",
@@ -945,6 +1507,7 @@ class BrowserJobExtractorService:
     "[class*='description']",
     "[class*='detail']"
   ];
+  const isLoadingShellText = (value) => /BOSS\u6b63\u5728\u52a0\u8f7d\u4e2d|function getCookie|window\.Promise|var staticPath|webpack|ICP/i.test(value || "");
   const detailKeywordPattern = /职位描述|岗位职责|任职要求|工作内容|岗位要求|Responsibilities|Requirements|Job Description/i;
   const pickDetailText = (doc) => {{
     const values = [];
@@ -960,7 +1523,8 @@ class BrowserJobExtractorService:
     }}
     const uniqueValues = [...new Set(values)].sort((left, right) => right.length - left.length);
     const picked = uniqueValues.find((value) => value.length > 80) || uniqueValues[0] || text(doc.body);
-    return (picked || "").slice(0, 2400);
+    const result = (picked || "").slice(0, 2400);
+    return isLoadingShellText(result) ? "" : result;
   }};
   const collectDetailSalaryCandidates = (doc, detailText) => {{
     const values = [];
@@ -1005,15 +1569,17 @@ class BrowserJobExtractorService:
       }};
     }}
   }};
-  const rawJobs = await Promise.all(cards.slice(0, limit * 4).map(async (card) => {{
+  const livePayloads = await Promise.all(cards.slice(0, limit * 4).map(async (card) => {{
     const link = preferredLink(card);
     const url = absolute(link?.getAttribute("href"));
     const cardDescription = text(card).slice(0, 1200);
+    const companyCandidates = collectTextCandidates(card, companySelectors).concat([cardDescription]);
     const detail = await fetchDetail(url);
     const description = detail.description || cardDescription;
     return {{
       title: firstText(card, titleSelectors) || text(link) || cardDescription.slice(0, 80),
       company: firstText(card, companySelectors),
+      company_candidates: [...new Set(companyCandidates)].slice(0, 24),
       city: firstText(card, citySelectors),
       salary: firstText(card, salarySelectors),
       salary_candidates: collectTextCandidates(card, salarySelectors).concat(detail.detail_salary_candidates || [], scriptSalaryCandidates(description)),
@@ -1026,19 +1592,40 @@ class BrowserJobExtractorService:
       job_type: platform === "boss" ? "boss_browser" : "shixiseng_browser"
     }};
   }}));
+  const livePayloadByKey = new Map();
+  for (const payload of livePayloads) {{
+    const key = snapshotKey(payload);
+    if (key) livePayloadByKey.set(key, payload);
+  }}
+  const rawPayloads = [];
+  const seenPayloadKeys = new Set();
+  for (const payload of cardSnapshots.slice(0, limit * 4)) {{
+    const key = snapshotKey(payload);
+    if (key && seenPayloadKeys.has(key)) continue;
+    if (key) seenPayloadKeys.add(key);
+    const livePayload = key ? livePayloadByKey.get(key) : null;
+    rawPayloads.push(livePayload ? {{ ...payload, ...livePayload, description: livePayload.description || payload.description }} : payload);
+  }}
+  for (const payload of livePayloads) {{
+    const key = snapshotKey(payload);
+    if (key && seenPayloadKeys.has(key)) continue;
+    if (key) seenPayloadKeys.add(key);
+    rawPayloads.push(payload);
+  }}
+  const rawJobs = rawPayloads.slice(0, limit * 4);
   const jobs = rawJobs.filter((job) => job.title || job.description).slice(0, limit);
   return {{
     jobs,
     diagnostics: {{
       matched_selector_counts: matchedSelectorCounts,
-      candidate_card_count: cards.length
+      candidate_card_count: Math.max(cards.length, cardSnapshots.length)
     }}
   }};
 }})()
 """
 
     def _clean(self, value: object) -> str:
-        return " ".join(str(value or "").split())
+        return " ".join(str(value or "").translate(BOSS_PRIVATE_DIGIT_TRANSLATION).split())
 
     def _trusted_field(
         self,
@@ -1065,6 +1652,9 @@ class BrowserJobExtractorService:
         has_pollution_marker = bool(re.search(r"[□�\ue000-\uf8ff]", cleaned))
         if not readable_chars:
             return True
+        placeholder_count = cleaned.count("口")
+        if placeholder_count >= 3 and placeholder_count / max(len(visible_chars), 1) > 0.25:
+            return True
         if has_pollution_marker and len(readable_chars) / max(len(visible_chars), 1) < 0.6:
             return True
         question_marks = cleaned.count("?")
@@ -1083,9 +1673,4 @@ class BrowserJobExtractorService:
         return labels.get(platform, platform)
 
     def _normalize_cdp_url(self, value: str) -> str | None:
-        value = value.strip().rstrip("/")
-        if not value:
-            return None
-        if value.startswith(("http://", "https://")):
-            return value
-        return f"http://{value}"
+        return resolve_cdp_url(value, opener=urlopen)

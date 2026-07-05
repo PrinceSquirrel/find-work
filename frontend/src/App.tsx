@@ -1,20 +1,31 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import { api } from "./lib/api";
+import { api, getTailorBlockedMessage } from "./lib/api";
 import {
   buildAgentStatusRows,
   buildAgentStatusRowsFromEvents,
+  buildJobMatchModelSummary,
+  buildModelRouteApplyOptions,
   buildOrchestratorSummary,
+  buildTailorModelSummary,
   clampPercent,
+  filterJobsForActiveSearchRun,
+  filterModelProfiles,
   formatDateTime,
   getAllowedNextStatuses,
   getJobDetailQuality,
+  getPdfDownloadFailureMessage,
+  getPdfTemplateStatus,
   getRatePercent,
+  getResumeReadingStatus,
   getStatusTone,
   rankJobs,
+  shouldShowTailorRetryAction,
+  summarizePlatformConfirmation,
   summarizeUsage
 } from "./lib/dashboard";
 import type {
+  AgentModelRoute,
   AnalyticsBucket,
   ApplicationAnalytics,
   ApplicationRecord,
@@ -24,7 +35,12 @@ import type {
   JobFilters,
   JobPosting,
   LLMUsageSummary,
+  ModelConfig,
+  ModelConfigTestResult,
+  ModelProfile,
+  ModelConfigUpdate,
   Platform,
+  PlatformApplyPreview,
   PlatformJobExtraction,
   PlatformSession,
   ResumeDraft,
@@ -66,6 +82,31 @@ const STATUS_COLUMNS: ApplicationStatus[] = [
   "closed"
 ];
 
+const DEEPSEEK_MODEL_PRESET: ModelConfigUpdate = {
+  provider: "openai-compatible",
+  model: "deepseek-v4-pro",
+  base_url: "https://api.deepseek.com",
+  api_key_env_var: "DEEPSEEK_API_KEY",
+  enabled: true,
+  estimation_only: false,
+  timeout_ms: 90000,
+  input_price_per_million: 1,
+  output_price_per_million: 2
+};
+
+const DEEPSEEK_FLASH_MODEL_PRESET: ModelConfigUpdate = {
+  ...DEEPSEEK_MODEL_PRESET,
+  model: "deepseek-v4-flash",
+  timeout_ms: 45000,
+  input_price_per_million: 0.5,
+  output_price_per_million: 1
+};
+
+const MODEL_ROUTE_AGENT_LABELS: Record<string, string> = {
+  ApplicationWriterAgent: "简历/招呼语生成",
+  JobMatchAgent: "岗位匹配评分"
+};
+
 type BusyState = {
   boot: boolean;
   upload: boolean;
@@ -78,6 +119,11 @@ type BusyState = {
   applyJobId: number | null;
   updateApplicationId: number | null;
   refreshDetailJobId: number | null;
+  manualDetailJobId: number | null;
+  manualResumeText: boolean;
+  modelTest: boolean;
+  modelRouteAgent: string | null;
+  modelProfileAction: "save" | "apply" | "delete" | null;
 };
 
 const initialBusy: BusyState = {
@@ -91,12 +137,31 @@ const initialBusy: BusyState = {
   tailorJobId: null,
   applyJobId: null,
   updateApplicationId: null,
-  refreshDetailJobId: null
+  refreshDetailJobId: null,
+  manualDetailJobId: null,
+  manualResumeText: false,
+  modelTest: false,
+  modelRouteAgent: null,
+  modelProfileAction: null
 };
 
 type SearchMode = "demo" | "browser_cdp";
 type AgentEventsPayload = Awaited<ReturnType<typeof api.getAgentEvents>>;
 type OrchestratorTaskDetail = NonNullable<NonNullable<AgentEventsPayload["orchestrator"]>["last_task"]>;
+
+function toModelConfigUpdate(config: ModelConfig): ModelConfigUpdate {
+  return {
+    provider: config.provider,
+    model: config.model,
+    base_url: config.base_url,
+    api_key_env_var: config.api_key_env_var,
+    enabled: config.enabled,
+    estimation_only: config.estimation_only,
+    timeout_ms: config.timeout_ms,
+    input_price_per_million: config.input_price_per_million,
+    output_price_per_million: config.output_price_per_million
+  };
+}
 
 function App() {
   const [resume, setResume] = useState<ResumeDraft | null>(null);
@@ -104,8 +169,22 @@ function App() {
   const [applications, setApplications] = useState<ApplicationRecord[]>([]);
   const [analytics, setAnalytics] = useState<ApplicationAnalytics | null>(null);
   const [usage, setUsage] = useState<LLMUsageSummary | null>(null);
+  const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null);
+  const [modelDraft, setModelDraft] = useState<ModelConfigUpdate>(DEEPSEEK_MODEL_PRESET);
+  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const [selectedModelProfileId, setSelectedModelProfileId] = useState<number | null>(null);
+  const [modelProfileName, setModelProfileName] = useState("DeepSeek v4pro");
+  const [modelProfileQuery, setModelProfileQuery] = useState("");
+  const [isModelManagerOpen, setIsModelManagerOpen] = useState(false);
+  const [modelMessage, setModelMessage] = useState<string | null>(null);
+  const [modelTestResult, setModelTestResult] = useState<ModelConfigTestResult | null>(null);
+  const [modelRoutes, setModelRoutes] = useState<AgentModelRoute[]>([]);
+  const [modelRouteDrafts, setModelRouteDrafts] = useState<Record<string, ModelConfigUpdate>>({});
+  const [modelRouteProfileSelections, setModelRouteProfileSelections] = useState<Record<string, number | "">>({});
+  const [modelRouteMessage, setModelRouteMessage] = useState<string | null>(null);
   const [agentEvents, setAgentEvents] = useState<Awaited<ReturnType<typeof api.getAgentEvents>> | null>(null);
   const [tailorBundles, setTailorBundles] = useState<Record<number, TailorBundle>>({});
+  const [tailorBlockedMessages, setTailorBlockedMessages] = useState<Record<number, string>>({});
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [detailJobId, setDetailJobId] = useState<number | null>(null);
   const [lastRun, setLastRun] = useState<SearchRun | null>(null);
@@ -122,6 +201,7 @@ function App() {
   const [failedAgent, setFailedAgent] = useState<ReturnType<typeof buildAgentStatusRows>[number]["agentName"] | null>(null);
   const [busy, setBusy] = useState<BusyState>(initialBusy);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [manualResumeText, setManualResumeText] = useState("");
   const [searchKeywords, setSearchKeywords] = useState("React 实习, Agent 实习");
   const [searchCity, setSearchCity] = useState("上海");
   const [searchFieldsTouched, setSearchFieldsTouched] = useState(false);
@@ -134,7 +214,10 @@ function App() {
     keyword: "",
     minScore: 0
   });
+  const [manualDetailDrafts, setManualDetailDrafts] = useState<Record<number, string>>({});
+  const [manualDetailNotes, setManualDetailNotes] = useState<Record<number, string>>({});
   const [applyNotes, setApplyNotes] = useState<Record<number, string>>({});
+  const [applyPreviews, setApplyPreviews] = useState<Record<number, PlatformApplyPreview>>({});
   const [statusDrafts, setStatusDrafts] = useState<Record<number, ApplicationStatus>>({});
   const [statusNotes, setStatusNotes] = useState<Record<number, string>>({});
 
@@ -152,6 +235,22 @@ function App() {
     [jobs, rankedJobs, selectedJobId]
   );
   const selectedBundle = selectedJob ? tailorBundles[selectedJob.id] : undefined;
+  const selectedTailorBlockedMessage = selectedJob ? tailorBlockedMessages[selectedJob.id] : "";
+  const selectedApplyPreview = selectedJob ? applyPreviews[selectedJob.id] : undefined;
+  const selectedTailorModelSummary = useMemo(
+    () => (selectedBundle ? buildTailorModelSummary(selectedBundle, usage) : null),
+    [selectedBundle, usage]
+  );
+  const selectedPdfTemplateStatus = useMemo(
+    () => getPdfTemplateStatus(resume, Boolean(selectedBundle), pdfStatusMessage),
+    [pdfStatusMessage, resume, selectedBundle]
+  );
+  const resumeReadingStatus = useMemo(() => getResumeReadingStatus(resume), [resume]);
+  const showTailorRetryAction = shouldShowTailorRetryAction({
+    job: selectedJob,
+    hasBundle: Boolean(selectedBundle),
+    blockedMessage: selectedTailorBlockedMessage
+  });
   const detailJob = useMemo(
     () => jobs.find((job) => job.id === detailJobId) ?? null,
     [detailJobId, jobs]
@@ -171,12 +270,13 @@ function App() {
     [platformExtractions]
   );
   const localRunningAgent = useMemo(() => {
-    if (busy.upload) return "ResumeParserAgent";
+    if (busy.upload || busy.manualResumeText) return "ResumeParserAgent";
     if (busy.search) return "JobSearchAgent";
     if (busy.refreshDetailJobId !== null) return "JobSearchAgent";
+    if (busy.manualDetailJobId !== null) return "JobMatchAgent";
     if (busy.tailorJobId !== null) return "ApplicationWriterAgent";
     return null;
-  }, [busy.refreshDetailJobId, busy.search, busy.tailorJobId, busy.upload]);
+  }, [busy.manualDetailJobId, busy.manualResumeText, busy.refreshDetailJobId, busy.search, busy.tailorJobId, busy.upload]);
   const runningAgent = agentEvents?.current_running_agent ?? localRunningAgent;
   const agentRows = useMemo(
     () =>
@@ -197,28 +297,96 @@ function App() {
   );
   const agentCost = agentEvents ? `$${agentEvents.total_cost_usd.toFixed(4)}` : usageCards.totalCost;
   const orchestratorSummary = useMemo(() => buildOrchestratorSummary(agentEvents), [agentEvents]);
+  const jobMatchModelSummary = useMemo(() => buildJobMatchModelSummary(agentEvents), [agentEvents]);
   const orchestratorTaskId = agentEvents?.orchestrator?.last_task?.id ?? null;
   const visibleOrchestratorDetail = orchestratorDetail?.id === orchestratorTaskId ? orchestratorDetail : null;
+  const selectedModelProfile = useMemo(
+    () => modelProfiles.find((profile) => profile.id === selectedModelProfileId) ?? null,
+    [modelProfiles, selectedModelProfileId]
+  );
+  const filteredModelProfiles = useMemo(
+    () => filterModelProfiles(modelProfiles, modelProfileQuery),
+    [modelProfileQuery, modelProfiles]
+  );
+  const modelRouteApplyOptions = useMemo(
+    () => buildModelRouteApplyOptions(modelRoutes, selectedModelProfile, MODEL_ROUTE_AGENT_LABELS),
+    [modelRoutes, selectedModelProfile]
+  );
 
   async function refreshWorkspace() {
     setBusy((current) => ({ ...current, boot: true }));
     setError(null);
     setFailedAgent(null);
     try {
-      const [nextJobs, nextApplications, nextAnalytics, nextUsage, nextSessions, nextAgentEvents] = await Promise.all([
+      const [
+        nextResume,
+        nextJobs,
+        nextApplications,
+        nextAnalytics,
+        nextUsage,
+        nextSessions,
+        nextAgentEvents,
+        nextModelConfig,
+        nextModelRoutes,
+        nextModelProfiles
+      ] = await Promise.all([
+        api.getLatestResume(),
         api.listJobs(),
         api.listApplications(),
         api.getApplicationAnalytics(),
         api.getLlmUsage(),
         api.getPlatformSessions(),
-        api.getAgentEvents()
+        api.getAgentEvents(),
+        api.getModelConfig(),
+        api.getModelRoutes(),
+        api.getModelProfiles()
       ]);
-      setJobs(nextJobs);
+      const visibleJobs = filterJobsForActiveSearchRun(nextJobs, lastRun?.id ?? null);
+      setResume(nextResume);
+      setManualResumeText(nextResume?.raw_text ?? "");
+      if (nextResume && !searchFieldsTouched) {
+        const suggestedKeywords = getProfileStringArray(nextResume.profile, "suggested_keywords");
+        const suggestedCity = getProfileString(nextResume.profile, "suggested_city");
+        if (suggestedKeywords.length) {
+          setSearchKeywords(suggestedKeywords.join(", "));
+        }
+        if (suggestedCity) {
+          setSearchCity(suggestedCity);
+        }
+      }
+      setJobs(visibleJobs);
+      setSelectedJobId(visibleJobs[0]?.id ?? null);
       setApplications(nextApplications);
       setAnalytics(nextAnalytics);
       setUsage(nextUsage);
       setPlatformSessions(nextSessions.sessions);
       setAgentEvents(nextAgentEvents);
+      setModelConfig(nextModelConfig);
+      setModelRoutes(nextModelRoutes.routes);
+      setModelProfiles(nextModelProfiles.profiles);
+      setModelRouteDrafts(Object.fromEntries(nextModelRoutes.routes.map((route) => [route.agent_name, toModelConfigUpdate(route)])));
+      setModelRouteProfileSelections((current) => {
+        const fallbackProfileId = nextModelProfiles.profiles[0]?.id ?? "";
+        return Object.fromEntries(
+          nextModelRoutes.routes.map((route) => [route.agent_name, current[route.agent_name] ?? fallbackProfileId])
+        );
+      });
+      setModelDraft({
+        provider: nextModelConfig.provider || DEEPSEEK_MODEL_PRESET.provider,
+        model: nextModelConfig.model || DEEPSEEK_MODEL_PRESET.model,
+        base_url: nextModelConfig.base_url || DEEPSEEK_MODEL_PRESET.base_url,
+        api_key_env_var: nextModelConfig.api_key_env_var || DEEPSEEK_MODEL_PRESET.api_key_env_var,
+        enabled: nextModelConfig.enabled,
+        estimation_only: nextModelConfig.estimation_only,
+        timeout_ms: nextModelConfig.timeout_ms,
+        input_price_per_million: nextModelConfig.input_price_per_million,
+        output_price_per_million: nextModelConfig.output_price_per_million
+      });
+      const firstProfile = nextModelProfiles.profiles[0] ?? null;
+      if (firstProfile && selectedModelProfileId === null) {
+        setSelectedModelProfileId(firstProfile.id);
+        setModelProfileName(firstProfile.name);
+      }
     } catch (nextError) {
       setFailedAgent("ResumeParserAgent");
       setError(toErrorMessage(nextError));
@@ -238,6 +406,202 @@ function App() {
     setAnalytics(nextAnalytics);
     setUsage(nextUsage);
     setAgentEvents(nextAgentEvents);
+  }
+
+  async function handleSaveModelConfig(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setModelMessage(null);
+    try {
+      const saved = await api.updateModelConfig(modelDraft);
+      setModelConfig(saved);
+      setModelTestResult(null);
+      setModelDraft({
+        provider: saved.provider,
+        model: saved.model,
+        base_url: saved.base_url,
+        api_key_env_var: saved.api_key_env_var,
+        enabled: saved.enabled,
+        estimation_only: saved.estimation_only,
+        timeout_ms: saved.timeout_ms,
+        input_price_per_million: saved.input_price_per_million,
+        output_price_per_million: saved.output_price_per_million
+      });
+      setModelMessage(saved.api_key_configured ? "DeepSeek 已接入，生成材料会调用模型。" : `已保存配置，请在后端环境变量 ${saved.api_key_env_var} 中放入 API Key。`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    }
+  }
+
+  function handleSelectModelProfile(profileIdValue: string) {
+    const profileId = profileIdValue ? Number(profileIdValue) : null;
+    setSelectedModelProfileId(profileId);
+    if (profileId === null) {
+      setModelProfileName("");
+      return;
+    }
+    const profile = modelProfiles.find((item) => item.id === profileId);
+    if (!profile) {
+      return;
+    }
+    setModelProfileName(profile.name);
+    setModelDraft(toModelConfigUpdate(profile));
+    setModelTestResult(null);
+    setModelMessage(`已载入模型档案：${profile.name}`);
+  }
+
+  function handleNewModelProfile() {
+    setSelectedModelProfileId(null);
+    setModelProfileName("");
+    setModelProfileQuery("");
+    setModelDraft(DEEPSEEK_MODEL_PRESET);
+    setModelTestResult(null);
+    setModelMessage("已切换为新建模型档案，填写名称后保存。");
+  }
+
+  async function handleSaveModelProfile() {
+    const profileName = modelProfileName.trim();
+    if (!profileName) {
+      setError("请先填写模型档案名称。");
+      return;
+    }
+    setBusy((current) => ({ ...current, modelProfileAction: "save" }));
+    setError(null);
+    setModelMessage(null);
+    try {
+      const saved =
+        selectedModelProfileId === null
+          ? await api.createModelProfile(profileName, modelDraft)
+          : await api.updateModelProfile(selectedModelProfileId, profileName, modelDraft);
+      setModelProfiles((current) => {
+        const nextProfiles = current.filter((profile) => profile.id !== saved.id);
+        return [...nextProfiles, saved].sort((left, right) => left.id - right.id);
+      });
+      setSelectedModelProfileId(saved.id);
+      setModelProfileName(saved.name);
+      setModelDraft(toModelConfigUpdate(saved));
+      setModelMessage(saved.api_key_configured ? `模型档案已保存：${saved.name}，Key 已配置。` : `模型档案已保存：${saved.name}，等待环境变量 ${saved.api_key_env_var}。`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, modelProfileAction: null }));
+    }
+  }
+
+  async function handleApplyModelProfile() {
+    if (selectedModelProfileId === null) {
+      setError("请先选择一个已保存的模型档案。");
+      return;
+    }
+    setBusy((current) => ({ ...current, modelProfileAction: "apply" }));
+    setError(null);
+    setModelMessage(null);
+    try {
+      const saved = await api.applyModelProfile(selectedModelProfileId);
+      setModelConfig(saved);
+      setModelDraft(toModelConfigUpdate(saved));
+      setModelTestResult(null);
+      setModelMessage(`已套用模型档案到当前全局配置：${saved.model}`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, modelProfileAction: null }));
+    }
+  }
+
+  async function handleDeleteModelProfile() {
+    if (selectedModelProfileId === null) {
+      setError("请先选择要删除的模型档案。");
+      return;
+    }
+    if (!window.confirm(`删除模型档案“${modelProfileName || selectedModelProfile?.name || selectedModelProfileId}”？`)) {
+      return;
+    }
+    setBusy((current) => ({ ...current, modelProfileAction: "delete" }));
+    setError(null);
+    setModelMessage(null);
+    try {
+      await api.deleteModelProfile(selectedModelProfileId);
+      setModelProfiles((current) => current.filter((profile) => profile.id !== selectedModelProfileId));
+      setSelectedModelProfileId(null);
+      setModelProfileName("");
+      setModelMessage("模型档案已删除，当前全局模型配置不会被自动清空。");
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, modelProfileAction: null }));
+    }
+  }
+
+  async function handleTestModelConnection() {
+    setBusy((current) => ({ ...current, modelTest: true }));
+    setError(null);
+    setModelMessage(null);
+    setModelTestResult(null);
+    try {
+      const result = await api.testModelConfigConnection();
+      setModelTestResult(result);
+      setModelMessage(
+        result.status === "success"
+          ? `模型连接成功：${result.provider} / ${result.model} / ${result.duration_ms}ms`
+          : `模型连接失败：${result.error || "请检查 API 地址、模型名和环境变量。"}`
+      );
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, modelTest: false }));
+    }
+  }
+
+  async function handleSaveModelRoute(event: FormEvent<HTMLFormElement>, agentName: string) {
+    event.preventDefault();
+    const draft = modelRouteDrafts[agentName];
+    if (!draft) {
+      setError(`未读取到 ${agentName} 的模型路由配置。`);
+      return;
+    }
+    setBusy((current) => ({ ...current, modelRouteAgent: agentName }));
+    setError(null);
+    setModelRouteMessage(null);
+    try {
+      const saved = await api.updateModelRoute(agentName, draft);
+      setModelRoutes((current) => {
+        const nextRoutes = current.filter((route) => route.agent_name !== saved.agent_name);
+        return [...nextRoutes, saved].sort((left, right) => left.agent_name.localeCompare(right.agent_name));
+      });
+      setModelRouteDrafts((current) => ({ ...current, [saved.agent_name]: toModelConfigUpdate(saved) }));
+      setModelRouteMessage(`${MODEL_ROUTE_AGENT_LABELS[saved.agent_name] ?? saved.agent_name} 已保存为 ${saved.model}`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, modelRouteAgent: null }));
+    }
+  }
+
+  async function handleApplyProfileToModelRoute(agentName: string, profileIdOverride?: number | null) {
+    const selectedProfileId = profileIdOverride ?? modelRouteProfileSelections[agentName];
+    const profile = modelProfiles.find((item) => item.id === Number(selectedProfileId));
+    if (!profile) {
+      setError("请先选择一个已保存的模型档案。");
+      return;
+    }
+    const nextDraft = toModelConfigUpdate(profile);
+    setBusy((current) => ({ ...current, modelRouteAgent: agentName }));
+    setError(null);
+    setModelRouteMessage(null);
+    try {
+      const saved = await api.updateModelRoute(agentName, nextDraft);
+      setModelRoutes((current) => {
+        const nextRoutes = current.filter((route) => route.agent_name !== saved.agent_name);
+        return [...nextRoutes, saved].sort((left, right) => left.agent_name.localeCompare(right.agent_name));
+      });
+      setModelRouteDrafts((current) => ({ ...current, [saved.agent_name]: toModelConfigUpdate(saved) }));
+      setModelRouteMessage(`${MODEL_ROUTE_AGENT_LABELS[saved.agent_name] ?? saved.agent_name} 已套用模型档案 ${profile.name}`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, modelRouteAgent: null }));
+    }
   }
 
   async function refreshAgentEvents() {
@@ -280,6 +644,7 @@ function App() {
     try {
       const nextResume = await api.uploadResume(uploadFile);
       setResume(nextResume);
+      setManualResumeText(nextResume.raw_text);
       if (!searchFieldsTouched) {
         const suggestedKeywords = getProfileStringArray(nextResume.profile, "suggested_keywords");
         const suggestedCity = getProfileString(nextResume.profile, "suggested_city");
@@ -299,9 +664,48 @@ function App() {
     }
   }
 
+  async function handleManualResumeTextUpdate() {
+    if (!resume?.id) {
+      setError("请先上传简历，再补全文本。");
+      return;
+    }
+    const rawText = manualResumeText.trim();
+    if (!rawText) {
+      setError("请先粘贴简历正文。");
+      return;
+    }
+    setBusy((current) => ({ ...current, manualResumeText: true }));
+    setError(null);
+    setFailedAgent(null);
+    try {
+      const nextResume = await api.updateResumeManualText(resume.id, rawText);
+      setResume(nextResume);
+      setManualResumeText(nextResume.raw_text);
+      if (!searchFieldsTouched) {
+        const suggestedKeywords = getProfileStringArray(nextResume.profile, "suggested_keywords");
+        const suggestedCity = getProfileString(nextResume.profile, "suggested_city");
+        if (suggestedKeywords.length) {
+          setSearchKeywords(suggestedKeywords.join(", "));
+        }
+        if (suggestedCity) {
+          setSearchCity(suggestedCity);
+        }
+      }
+    } catch (nextError) {
+      setFailedAgent("ResumeParserAgent");
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, manualResumeText: false }));
+    }
+  }
+
   async function createSearchRunFromCurrentForm(nextSearchMode: SearchMode) {
     if (!resume?.id) {
       setError("请先上传简历，再创建搜索任务。");
+      return;
+    }
+    if (!resumeReadingStatus.canGenerateMaterials) {
+      setError("当前简历还没有可用正文，请先补全文本。");
       return;
     }
     const selectedPlatforms = getSelectedPlatforms(platforms);
@@ -313,6 +717,15 @@ function App() {
     setBusy((current) => ({ ...current, search: true }));
     setError(null);
     setFailedAgent(null);
+    setLastRun(null);
+    setJobs([]);
+    setSelectedJobId(null);
+    setDetailJobId(null);
+    setTailorBundles({});
+    setTailorBlockedMessages({});
+    setManualDetailDrafts({});
+    setManualDetailNotes({});
+    setApplyPreviews({});
     try {
       const run = await api.createSearchRun({
         resume_id: resume.id,
@@ -324,7 +737,7 @@ function App() {
         platforms: selectedPlatforms,
         search_mode: nextSearchMode
       });
-      const nextJobs = await api.listJobs(run.id);
+      const nextJobs = filterJobsForActiveSearchRun(await api.listJobs(run.id), run.id);
       setLastRun(run);
       setJobs(nextJobs);
       setSelectedJobId(nextJobs[0]?.id ?? null);
@@ -412,12 +825,46 @@ function App() {
     try {
       const updatedJob = await api.refreshJobDetail(job.id);
       setJobs((current) => current.map((item) => (item.id === updatedJob.id ? updatedJob : item)));
+      setTailorBlockedMessages((current) => {
+        const { [updatedJob.id]: _removed, ...rest } = current;
+        return rest;
+      });
       setDetailJobId(updatedJob.id);
       await refreshAgentEvents();
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
       setBusy((current) => ({ ...current, refreshDetailJobId: null }));
+    }
+  }
+
+  async function handleManualDetailUpdate(job: JobPosting) {
+    const description = (manualDetailDrafts[job.id] ?? job.description).trim();
+    if (!description) {
+      setError("请先粘贴完整岗位要求/JD，再保存并重新匹配。");
+      return;
+    }
+    setBusy((current) => ({ ...current, manualDetailJobId: job.id }));
+    setError(null);
+    try {
+      const updatedJob = await api.updateJobManualDetail(job.id, {
+        description,
+        note: manualDetailNotes[job.id] ?? "前端详情弹窗人工补全 JD"
+      });
+      setJobs((current) => current.map((item) => (item.id === updatedJob.id ? updatedJob : item)));
+      setManualDetailDrafts((current) => ({ ...current, [updatedJob.id]: updatedJob.description }));
+      setManualDetailNotes((current) => ({ ...current, [updatedJob.id]: "" }));
+      setTailorBlockedMessages((current) => {
+        const { [updatedJob.id]: _removed, ...rest } = current;
+        return rest;
+      });
+      setSelectedJobId(updatedJob.id);
+      setDetailJobId(updatedJob.id);
+      await refreshAgentEvents();
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, manualDetailJobId: null }));
     }
   }
 
@@ -434,24 +881,40 @@ function App() {
       setError("请先上传简历，再生成定制材料。");
       return;
     }
+    if (!resumeReadingStatus.canGenerateMaterials) {
+      setError("当前简历还没有可用正文，请先补全文本。");
+      return;
+    }
     setBusy((current) => ({ ...current, tailorJobId: job.id }));
     setError(null);
     setPdfStatusMessage(null);
+    setTailorBlockedMessages((current) => {
+      const { [job.id]: _removed, ...rest } = current;
+      return rest;
+    });
     try {
       const bundle = await api.tailorJob(job.id, resume.id);
       setTailorBundles((current) => ({ ...current, [job.id]: bundle }));
       setSelectedJobId(job.id);
       await refreshOutcomeData();
     } catch (nextError) {
-      setError(toErrorMessage(nextError));
+      const blockedMessage = getTailorBlockedMessage(nextError);
+      if (blockedMessage) {
+        setSelectedJobId(job.id);
+        setTailorBlockedMessages((current) => ({ ...current, [job.id]: blockedMessage }));
+        setError("该岗位详情还不完整，需先刷新或人工补全 JD。");
+      } else {
+        setError(toErrorMessage(nextError));
+      }
     } finally {
       setBusy((current) => ({ ...current, tailorJobId: null }));
     }
   }
 
   async function handleDownloadTailoredPdf(bundle: TailorBundle) {
-    if (!resume?.template_available) {
-      setPdfStatusMessage("模板化 PDF：需重新上传 DOCX 简历以保留模板。");
+    const pdfStatus = getPdfTemplateStatus(resume, true, null);
+    if (!pdfStatus.canDownload) {
+      setPdfStatusMessage(pdfStatus.label);
       return;
     }
     setPdfStatusMessage("模板化 PDF：正在生成一页 PDF...");
@@ -465,13 +928,7 @@ function App() {
         } catch {
           detail = response.statusText || detail;
         }
-        if (response.status === 503) {
-          setPdfStatusMessage(`模板化 PDF：缺少转换器。${detail}`);
-        } else if (detail.includes("重新上传 DOCX")) {
-          setPdfStatusMessage("模板化 PDF：需重新上传 DOCX 简历以保留模板。");
-        } else {
-          setPdfStatusMessage(`模板化 PDF：${detail}`);
-        }
+        setPdfStatusMessage(getPdfDownloadFailureMessage(response.status, detail));
         return;
       }
       const blob = await response.blob();
@@ -489,14 +946,40 @@ function App() {
     }
   }
 
-  async function handleApply(job: JobPosting) {
+  async function handleApplyPreview(job: JobPosting) {
+    setBusy((current) => ({ ...current, applyJobId: job.id }));
+    setError(null);
+    try {
+      const preview = await api.previewPlatformApply(job.id);
+      setSelectedJobId(job.id);
+      setApplyPreviews((current) => ({ ...current, [job.id]: preview }));
+      if (!preview.ready) {
+        setError(`平台投递预检未通过：${preview.evidence || preview.status}`);
+      }
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, applyJobId: null }));
+    }
+  }
+
+  async function handleConfirmPlatformApply(job: JobPosting) {
+    const preview = applyPreviews[job.id];
+    if (!preview?.ready) {
+      setError("请先检查平台投递入口，预检通过后再确认真实投递。");
+      return;
+    }
     setBusy((current) => ({ ...current, applyJobId: job.id }));
     setError(null);
     try {
       const note =
         applyNotes[job.id]?.trim() ||
-        `人工确认后投递：${job.company} / ${job.title}`;
-      await api.createApplyRecord(job.id, note);
+        `平台预检通过后真实投递：${job.company} / ${job.title} / ${preview.button_text || preview.status}`;
+      await api.applyToPlatform(job.id, note);
+      setApplyPreviews((current) => {
+        const { [job.id]: _removed, ...rest } = current;
+        return rest;
+      });
       await refreshOutcomeData();
     } catch (nextError) {
       setError(toErrorMessage(nextError));
@@ -603,11 +1086,11 @@ function App() {
               <label className="file-drop">
                 <input
                   type="file"
-                  accept=".txt,.pdf,.doc,.docx"
+                  accept=".txt,.pdf,.doc,.docx,.png,.jpg,.jpeg"
                   onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
                 />
                 <span>{uploadFile?.name ?? "选择简历文件"}</span>
-                <small>支持 txt/pdf/docx，文件只提交给本地后端解析。</small>
+                <small>支持 txt/pdf/docx/png/jpg，文件只提交给本地后端解析。</small>
               </label>
               <button className="primary" type="submit" disabled={busy.upload}>
                 {busy.upload ? "上传中..." : "上传并解析"}
@@ -617,11 +1100,331 @@ function App() {
               <div className="resume-card">
                 <b>{resume.filename}</b>
                 <span>ID #{resume.id} · {formatDateTime(resume.created_at)}</span>
-                <p>{resume.raw_text.slice(0, 96)}{resume.raw_text.length > 96 ? "..." : ""}</p>
+                <div className="resume-reading-status">
+                  <span
+                    className={`chip ${
+                      resumeReadingStatus.tone === "success"
+                        ? "positive"
+                        : resumeReadingStatus.tone === "warning"
+                        ? "warning"
+                        : ""
+                    }`}
+                  >
+                    {resumeReadingStatus.label}
+                  </span>
+                  <small>{resumeReadingStatus.detail}</small>
+                  {resumeReadingStatus.actionHint ? <small>{resumeReadingStatus.actionHint}</small> : null}
+                </div>
+                {resume.raw_text ? (
+                  <p>{resume.raw_text.slice(0, 96)}{resume.raw_text.length > 96 ? "..." : ""}</p>
+                ) : null}
+                {resumeReadingStatus.needsManualText ? (
+                  <div className="manual-resume-editor">
+                    <label>
+                      <span>粘贴简历正文</span>
+                      <textarea
+                        rows={7}
+                        value={manualResumeText}
+                        onChange={(event) => setManualResumeText(event.target.value)}
+                        placeholder="如果 PDF/图片无法自动读取，请把简历正文粘贴到这里。保存后会重新提取技能、推荐关键词和城市。"
+                      />
+                    </label>
+                    <button type="button" onClick={() => void handleManualResumeTextUpdate()} disabled={busy.manualResumeText}>
+                      {busy.manualResumeText ? "保存中..." : "保存简历正文"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <EmptyState title="还没有简历" text="上传后才能创建搜索任务和生成定制材料。" />
             )}
+          </Panel>
+
+          <Panel title="模型 / API" kicker="LLM Agent">
+            <div className="model-manager-entry">
+              <div>
+                <b>Model Picker</b>
+                <span>
+                  {selectedModelProfile
+                    ? `${selectedModelProfile.name} / ${selectedModelProfile.model}`
+                    : modelConfig
+                      ? `Auto / ${modelConfig.model}`
+                      : "Auto / waiting for model config"}
+                </span>
+              </div>
+              <button type="button" onClick={() => setIsModelManagerOpen(true)}>
+                Manage Models...
+              </button>
+            </div>
+            <section>
+              <h3>模型档案</h3>
+              <div className="search-form">
+                <label>
+                  <span>已保存模型</span>
+                  <select
+                    value={selectedModelProfileId ?? ""}
+                    onChange={(event) => handleSelectModelProfile(event.target.value)}
+                  >
+                    <option value="">新建 / 未选择</option>
+                    {modelProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name} · {profile.model}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>档案名称</span>
+                  <input
+                    value={modelProfileName}
+                    onChange={(event) => setModelProfileName(event.target.value)}
+                    placeholder="例如：DeepSeek v4pro"
+                  />
+                </label>
+                <button type="button" onClick={handleNewModelProfile}>
+                  新建模型档案
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => void handleSaveModelProfile()}
+                  disabled={busy.modelProfileAction === "save"}
+                >
+                  {busy.modelProfileAction === "save" ? "保存中..." : "保存/更新档案"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleApplyModelProfile()}
+                  disabled={selectedModelProfileId === null || busy.modelProfileAction === "apply"}
+                >
+                  {busy.modelProfileAction === "apply" ? "套用中..." : "套用为当前模型"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteModelProfile()}
+                  disabled={selectedModelProfileId === null || busy.modelProfileAction === "delete"}
+                >
+                  {busy.modelProfileAction === "delete" ? "删除中..." : "删除档案"}
+                </button>
+              </div>
+              <div className="run-line">
+                <span className="status-dot" />
+                {modelProfiles.length ? `已保存 ${modelProfiles.length} 个模型档案` : "还没有模型档案，可先保存 DeepSeek 配置。"}
+              </div>
+            </section>
+            <form className="search-form" onSubmit={handleSaveModelConfig}>
+              <label>
+                <span>模型</span>
+                <input
+                  value={modelDraft.model}
+                  onChange={(event) => setModelDraft((current) => ({ ...current, model: event.target.value }))}
+                  placeholder="deepseek-v4-pro"
+                />
+              </label>
+              <label>
+                <span>API 地址</span>
+                <input
+                  value={modelDraft.base_url}
+                  onChange={(event) => setModelDraft((current) => ({ ...current, base_url: event.target.value }))}
+                  placeholder="https://api.deepseek.com"
+                />
+              </label>
+              <label>
+                <span>Key 环境变量</span>
+                <input
+                  value={modelDraft.api_key_env_var}
+                  onChange={(event) => setModelDraft((current) => ({ ...current, api_key_env_var: event.target.value }))}
+                  placeholder="DEEPSEEK_API_KEY"
+                />
+              </label>
+              <div className="segmented">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={modelDraft.enabled}
+                    onChange={(event) => setModelDraft((current) => ({ ...current, enabled: event.target.checked }))}
+                  />
+                  启用真实模型
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={!modelDraft.estimation_only}
+                    onChange={(event) => setModelDraft((current) => ({ ...current, estimation_only: !event.target.checked }))}
+                  />
+                  调用 DeepSeek
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setModelDraft(DEEPSEEK_MODEL_PRESET);
+                  setModelTestResult(null);
+                  setModelMessage("已填入 DeepSeek v4pro 官方模型名 deepseek-v4-pro，请确认后保存。");
+                }}
+              >
+                使用 DeepSeek v4pro 预设
+              </button>
+              <button className="primary" type="submit">
+                保存模型配置
+              </button>
+              <button type="button" onClick={() => void handleTestModelConnection()} disabled={busy.modelTest}>
+                {busy.modelTest ? "测试中..." : "测试模型连接"}
+              </button>
+            </form>
+            <div className="run-line">
+              {modelConfig ? (
+                <>
+                  <span className="status-dot" />
+                  {modelConfig.enabled && !modelConfig.estimation_only ? "真实模型" : "本地/估算"} · {modelConfig.model}
+                  {" · "}
+                  {modelConfig.api_key_configured ? "Key 已配置" : `等待环境变量 ${modelConfig.api_key_env_var}`}
+                </>
+              ) : (
+                "等待读取模型配置"
+              )}
+            </div>
+            {modelTestResult ? (
+              <div className="run-line">
+                <span className="status-dot" />
+                {modelTestResult.status === "success" ? "连接成功" : "连接失败"} · {modelTestResult.provider} / {modelTestResult.model}
+                {" · "}
+                {modelTestResult.duration_ms}ms · {modelTestResult.api_key_configured ? "Key 已配置" : "Key 未配置"}
+                {modelTestResult.status !== "success" ? ` · ${modelTestResult.error || "未知错误"}` : ""}
+              </div>
+            ) : null}
+            {modelMessage ? <small>{modelMessage}</small> : null}
+            <section>
+              <h3>Agent 模型路由</h3>
+              <div className="split-list">
+                {modelRoutes.map((route) => {
+                  const draft = modelRouteDrafts[route.agent_name] ?? toModelConfigUpdate(route);
+                  const preset = route.agent_name === "JobMatchAgent" ? DEEPSEEK_FLASH_MODEL_PRESET : DEEPSEEK_MODEL_PRESET;
+                  const presetLabel = route.agent_name === "JobMatchAgent" ? "DeepSeek v4flash" : "DeepSeek v4pro";
+                  const selectedRouteProfileId = modelRouteProfileSelections[route.agent_name] ?? "";
+                  return (
+                    <form
+                      className="search-form"
+                      key={route.agent_name}
+                      onSubmit={(event) => void handleSaveModelRoute(event, route.agent_name)}
+                    >
+                      <div>
+                        <b>{MODEL_ROUTE_AGENT_LABELS[route.agent_name] ?? route.agent_name}</b>
+                        <small>
+                          {route.agent_name} · {route.api_key_configured ? "Key 已配置" : `等待 ${route.api_key_env_var}`}
+                        </small>
+                      </div>
+                      <label>
+                        <span>从模型档案套用</span>
+                        <select
+                          value={selectedRouteProfileId}
+                          onChange={(event) =>
+                            setModelRouteProfileSelections((current) => ({
+                              ...current,
+                              [route.agent_name]: event.target.value ? Number(event.target.value) : ""
+                            }))
+                          }
+                        >
+                          <option value="">选择模型档案</option>
+                          {modelProfiles.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {profile.name} · {profile.model}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => void handleApplyProfileToModelRoute(route.agent_name)}
+                        disabled={!selectedRouteProfileId || busy.modelRouteAgent === route.agent_name}
+                      >
+                        套用并保存到此 Agent
+                      </button>
+                      <label>
+                        <span>模型</span>
+                        <input
+                          value={draft.model}
+                          onChange={(event) =>
+                            setModelRouteDrafts((current) => ({
+                              ...current,
+                              [route.agent_name]: { ...draft, model: event.target.value }
+                            }))
+                          }
+                          placeholder={preset.model}
+                        />
+                      </label>
+                      <label>
+                        <span>API 地址</span>
+                        <input
+                          value={draft.base_url}
+                          onChange={(event) =>
+                            setModelRouteDrafts((current) => ({
+                              ...current,
+                              [route.agent_name]: { ...draft, base_url: event.target.value }
+                            }))
+                          }
+                          placeholder="https://api.deepseek.com"
+                        />
+                      </label>
+                      <label>
+                        <span>Key 环境变量</span>
+                        <input
+                          value={draft.api_key_env_var}
+                          onChange={(event) =>
+                            setModelRouteDrafts((current) => ({
+                              ...current,
+                              [route.agent_name]: { ...draft, api_key_env_var: event.target.value }
+                            }))
+                          }
+                          placeholder="DEEPSEEK_API_KEY"
+                        />
+                      </label>
+                      <div className="segmented">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={draft.enabled}
+                            onChange={(event) =>
+                              setModelRouteDrafts((current) => ({
+                                ...current,
+                                [route.agent_name]: { ...draft, enabled: event.target.checked }
+                              }))
+                            }
+                          />
+                          启用
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={!draft.estimation_only}
+                            onChange={(event) =>
+                              setModelRouteDrafts((current) => ({
+                                ...current,
+                                [route.agent_name]: { ...draft, estimation_only: !event.target.checked }
+                              }))
+                            }
+                          />
+                          调用模型
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setModelRouteDrafts((current) => ({ ...current, [route.agent_name]: preset }));
+                          setModelRouteMessage(`${MODEL_ROUTE_AGENT_LABELS[route.agent_name] ?? route.agent_name} 已填入 ${presetLabel} 预设。`);
+                        }}
+                      >
+                        套用 {presetLabel}
+                      </button>
+                      <button className="primary" type="submit" disabled={busy.modelRouteAgent === route.agent_name}>
+                        {busy.modelRouteAgent === route.agent_name ? "保存中..." : "保存 Agent 路由"}
+                      </button>
+                    </form>
+                  );
+                })}
+              </div>
+              {modelRouteMessage ? <small>{modelRouteMessage}</small> : null}
+            </section>
           </Panel>
 
           <Panel title="搜索任务" kicker="Search Run">
@@ -672,7 +1475,7 @@ function App() {
                   </label>
                 ))}
               </div>
-              <button className="primary" type="submit" disabled={busy.search || !resume}>
+              <button className="primary" type="submit" disabled={busy.search || !resume || !resumeReadingStatus.canGenerateMaterials}>
                 {busy.search ? "搜索中..." : "创建搜索任务"}
               </button>
             </form>
@@ -944,6 +1747,14 @@ function App() {
               />
             </label>
           </div>
+          <div className="source-banner">
+            <b>JobMatchAgent：{jobMatchModelSummary?.statusLabel ?? "等待评分"}</b>
+            <span>
+              {jobMatchModelSummary
+                ? `${jobMatchModelSummary.modelLabel} · ${jobMatchModelSummary.usageLabel} · ${jobMatchModelSummary.detail}`
+                : "创建搜索任务后会显示模型路由、规则兜底和 token 成本。"}
+            </span>
+          </div>
 
           {busy.boot || busy.search ? (
             <LoadingRows count={5} />
@@ -957,6 +1768,7 @@ function App() {
               </div>
               {rankedJobs.map((job) => {
                 const application = applicationsByJob.get(job.id);
+                const applyPreview = applyPreviews[job.id];
                 return (
                   <article
                     className={`table-row ${selectedJob?.id === job.id ? "is-selected" : ""}`}
@@ -996,10 +1808,26 @@ function App() {
                       <button
                         type="button"
                         disabled={Boolean(application) || busy.applyJobId === job.id}
-                        onClick={(event) => { event.stopPropagation(); void handleApply(job); }}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void (applyPreview?.ready ? handleConfirmPlatformApply(job) : handleApplyPreview(job));
+                        }}
                       >
-                        {application ? "已记录" : busy.applyJobId === job.id ? "记录中" : "记录投递"}
+                        {application
+                          ? "平台已确认"
+                          : busy.applyJobId === job.id
+                            ? "平台检查中"
+                            : applyPreview?.ready
+                              ? "确认真实投递"
+                              : "检查投递入口"}
                       </button>
+                      {applyPreview ? (
+                        <small className={applyPreview.ready ? "chip positive" : "chip warning"}>
+                          {applyPreview.ready
+                            ? `已找到平台入口：${applyPreview.button_text || applyPreview.status}`
+                            : `预检未通过：${applyPreview.status}`}
+                        </small>
+                      ) : null}
                     </div>
                   </article>
                 );
@@ -1027,16 +1855,55 @@ function App() {
                   <div className={`truth-badge ${selectedBundle.truth_check_passed ? "pass" : "risk"}`}>
                     {selectedBundle.truth_check_passed ? "事实校验通过" : "需要复核事实风险"}
                   </div>
+                  {selectedTailorModelSummary ? (
+                    <section>
+                      <h3>模型调用状态</h3>
+                      <div className={`truth-badge ${selectedTailorModelSummary.tone === "success" ? "pass" : "risk"}`}>
+                        {selectedTailorModelSummary.statusLabel}
+                      </div>
+                      <div className="split-list">
+                        <div>
+                          <b>模型</b>
+                          <small>{selectedTailorModelSummary.providerModel}</small>
+                        </div>
+                        <div>
+                          <b>路由</b>
+                          <small>{selectedTailorModelSummary.routeLabel}</small>
+                        </div>
+                      </div>
+                      <p>{selectedTailorModelSummary.detail}</p>
+                      <small>{selectedTailorModelSummary.usageLabel}</small>
+                      {selectedTailorModelSummary.setupHint ? (
+                        <p className="chip warning">{selectedTailorModelSummary.setupHint}</p>
+                      ) : null}
+                      {selectedTailorModelSummary.errorLabel ? (
+                        <p className="chip warning">{selectedTailorModelSummary.errorLabel}</p>
+                      ) : null}
+                    </section>
+                  ) : null}
                   <div className="pdf-download-row">
-                    <button type="button" onClick={() => void handleDownloadTailoredPdf(selectedBundle)}>
+                    <button
+                      type="button"
+                      disabled={!selectedPdfTemplateStatus.canDownload}
+                      onClick={() => void handleDownloadTailoredPdf(selectedBundle)}
+                    >
                       下载模板化一页 PDF
                     </button>
-                    <span>
-                      {pdfStatusMessage ||
-                        (resume?.template_available
-                          ? "模板化 PDF：可下载"
-                          : "模板化 PDF：需重新上传 DOCX 简历")}
-                    </span>
+                    <div className="pdf-status-text">
+                      <span
+                        className={`chip ${
+                          selectedPdfTemplateStatus.tone === "success"
+                            ? "positive"
+                            : selectedPdfTemplateStatus.tone === "warning"
+                            ? "warning"
+                            : ""
+                        }`}
+                      >
+                        {selectedPdfTemplateStatus.label}
+                      </span>
+                      <small>{selectedPdfTemplateStatus.detail}</small>
+                      {selectedPdfTemplateStatus.actionHint ? <small>{selectedPdfTemplateStatus.actionHint}</small> : null}
+                    </div>
                   </div>
                   <section>
                     <h3>简历改写要求</h3>
@@ -1076,17 +1943,58 @@ function App() {
                       placeholder="例如：已人工核对岗位 JD 和招呼语，BOSS 站内投递。"
                     />
                   </label>
+                  <div className="detail-recovery">
+                    <b>真实平台投递预检</b>
+                    {selectedApplyPreview ? (
+                      <>
+                        <p>
+                          {selectedApplyPreview.ready
+                            ? `已在平台页找到入口：${selectedApplyPreview.button_text || selectedApplyPreview.status}`
+                            : `暂未找到可确认入口：${selectedApplyPreview.evidence || selectedApplyPreview.status}`}
+                        </p>
+                        <small>{selectedApplyPreview.source_url || selectedJob.url}</small>
+                      </>
+                    ) : (
+                      <p>先点击“检查投递入口”，系统会打开真实岗位页，只读确认是否存在投递/沟通按钮。</p>
+                    )}
+                  </div>
                   <button
                     className="primary"
                     type="button"
                     disabled={Boolean(applicationsByJob.get(selectedJob.id)) || busy.applyJobId === selectedJob.id}
-                    onClick={() => void handleApply(selectedJob)}
+                    onClick={() =>
+                      void (selectedApplyPreview?.ready
+                        ? handleConfirmPlatformApply(selectedJob)
+                        : handleApplyPreview(selectedJob))
+                    }
                   >
                     {applicationsByJob.get(selectedJob.id)
-                      ? "已记录投递"
+                      ? "平台已确认投递"
                       : busy.applyJobId === selectedJob.id
-                        ? "记录中..."
-                        : "确认后记录投递"}
+                        ? "平台检查中..."
+                        : selectedApplyPreview?.ready
+                          ? "确认真实平台投递"
+                          : "检查投递入口"}
+                  </button>
+                </div>
+              ) : selectedTailorBlockedMessage ? (
+                <div className="detail-recovery">
+                  <b>生成已暂停：需要先补全 JD</b>
+                  <p>{selectedTailorBlockedMessage}</p>
+                  <button type="button" onClick={() => setDetailJobId(selectedJob.id)}>
+                    查看/补全岗位要求
+                  </button>
+                </div>
+              ) : showTailorRetryAction ? (
+                <div className="detail-recovery">
+                  <b>岗位要求已补全，可以重新生成材料</b>
+                  <p>将使用当前完整 JD 调用 ApplicationWriterAgent，生成简历改写要求和招呼语。</p>
+                  <button
+                    type="button"
+                    disabled={busy.tailorJobId === selectedJob.id}
+                    onClick={() => void handleTailor(selectedJob)}
+                  >
+                    {busy.tailorJobId === selectedJob.id ? "生成中..." : "重新生成材料"}
                   </button>
                 </div>
               ) : (
@@ -1179,6 +2087,10 @@ function App() {
               </div>
               {applications.map((application) => {
                 const nextStatuses = getAllowedNextStatuses(application.current_status);
+                const platformConfirmation = summarizePlatformConfirmation(
+                  application.platform_proof,
+                  application.latest_note
+                );
                 return (
                   <article className="table-row" key={application.id}>
                     <div>
@@ -1190,7 +2102,23 @@ function App() {
                       <span className={`status-pill tone-${getStatusTone(application.current_status)}`}>
                         {STATUS_LABELS[application.current_status] ?? application.current_status}
                       </span>
-                      <p>{application.latest_note || "暂无备注"}</p>
+                      <div className="event-stack">
+                        <span className={`chip ${platformConfirmation.confirmed ? "positive" : "warning"}`}>
+                          {platformConfirmation.confirmed ? "平台已确认" : "缺少平台确认证据"}
+                        </span>
+                        {platformConfirmation.evidence ? <small>{platformConfirmation.evidence}</small> : null}
+                        {platformConfirmation.buttonText ? <small>按钮：{platformConfirmation.buttonText}</small> : null}
+                        {platformConfirmation.pageSummary ? <small>{platformConfirmation.pageSummary}</small> : null}
+                        {platformConfirmation.confirmedAt ? (
+                          <small>确认于 {formatDateTime(platformConfirmation.confirmedAt)}</small>
+                        ) : null}
+                        {platformConfirmation.sourceUrl ? (
+                          <a href={platformConfirmation.sourceUrl} target="_blank" rel="noreferrer">
+                            打开平台记录
+                          </a>
+                        ) : null}
+                      </div>
+                      <p>{platformConfirmation.note || "暂无备注"}</p>
                     </div>
                     <div className="status-editor">
                       <select
@@ -1254,6 +2182,197 @@ function App() {
           <RateChart title="按平台" buckets={analytics?.platform ?? {}} labelMap={PLATFORM_LABELS} />
         </Panel>
       </section>
+      {isModelManagerOpen ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setIsModelManagerOpen(false)}>
+          <aside
+            className="model-manager-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Manage Models"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-heading">
+              <div>
+                <span>LLM Agent</span>
+                <h2>Manage Models</h2>
+                <p>选择、搜索、保存、更新或删除不同模型版本。真实 API Key 仍只通过环境变量读取。</p>
+              </div>
+              <button type="button" onClick={() => setIsModelManagerOpen(false)}>
+                关闭
+              </button>
+            </div>
+            <div className="model-manager-grid">
+              <section className="model-picker-pane">
+                <label className="model-search">
+                  <span>Search models</span>
+                  <input
+                    value={modelProfileQuery}
+                    onChange={(event) => setModelProfileQuery(event.target.value)}
+                    placeholder="DeepSeek / v4pro / api.deepseek.com"
+                  />
+                </label>
+                <button
+                  type="button"
+                  className={`model-option ${selectedModelProfileId === null ? "active" : ""}`}
+                  onClick={() => {
+                    setSelectedModelProfileId(null);
+                    setModelProfileName("");
+                    if (modelConfig) {
+                      setModelDraft(toModelConfigUpdate(modelConfig));
+                    }
+                    setModelMessage("已切换为 Auto：使用当前全局模型配置。");
+                  }}
+                >
+                  <span>✓</span>
+                  <div>
+                    <b>Auto</b>
+                    <small>{modelConfig ? modelConfig.model : "等待模型配置"}</small>
+                  </div>
+                </button>
+                {filteredModelProfiles.map((profile) => (
+                  <button
+                    type="button"
+                    className={`model-option ${selectedModelProfileId === profile.id ? "active" : ""}`}
+                    key={profile.id}
+                    onClick={() => handleSelectModelProfile(String(profile.id))}
+                  >
+                    <span>{selectedModelProfileId === profile.id ? "✓" : ""}</span>
+                    <div>
+                      <b>{profile.name}</b>
+                      <small>{profile.provider} / {profile.model}</small>
+                      <small>{profile.api_key_configured ? "Key 已配置" : `等待 ${profile.api_key_env_var}`}</small>
+                    </div>
+                  </button>
+                ))}
+                {filteredModelProfiles.length === 0 ? (
+                  <div className="model-empty">没有匹配的模型档案，可以在右侧新建。</div>
+                ) : null}
+              </section>
+              <form className="model-profile-editor" onSubmit={(event) => { event.preventDefault(); void handleSaveModelProfile(); }}>
+                <div className="editor-title">
+                  <b>{selectedModelProfile ? "编辑模型档案" : "新建模型档案"}</b>
+                  <button type="button" onClick={handleNewModelProfile}>
+                    新建
+                  </button>
+                </div>
+                <label>
+                  <span>档案名称</span>
+                  <input
+                    value={modelProfileName}
+                    onChange={(event) => setModelProfileName(event.target.value)}
+                    placeholder="例如：DeepSeek v4pro"
+                  />
+                </label>
+                <label>
+                  <span>Provider</span>
+                  <input
+                    value={modelDraft.provider}
+                    onChange={(event) => setModelDraft((current) => ({ ...current, provider: event.target.value }))}
+                    placeholder="openai-compatible"
+                  />
+                </label>
+                <label>
+                  <span>Model</span>
+                  <input
+                    value={modelDraft.model}
+                    onChange={(event) => setModelDraft((current) => ({ ...current, model: event.target.value }))}
+                    placeholder="deepseek-v4-pro"
+                  />
+                </label>
+                <label>
+                  <span>API 地址</span>
+                  <input
+                    value={modelDraft.base_url}
+                    onChange={(event) => setModelDraft((current) => ({ ...current, base_url: event.target.value }))}
+                    placeholder="https://api.deepseek.com"
+                  />
+                </label>
+                <label>
+                  <span>Key 环境变量</span>
+                  <input
+                    value={modelDraft.api_key_env_var}
+                    onChange={(event) => setModelDraft((current) => ({ ...current, api_key_env_var: event.target.value }))}
+                    placeholder="DEEPSEEK_API_KEY"
+                  />
+                </label>
+                <div className="segmented">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={modelDraft.enabled}
+                      onChange={(event) => setModelDraft((current) => ({ ...current, enabled: event.target.checked }))}
+                    />
+                    启用
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={!modelDraft.estimation_only}
+                      onChange={(event) => setModelDraft((current) => ({ ...current, estimation_only: !event.target.checked }))}
+                    />
+                    调用模型
+                  </label>
+                </div>
+                <div className="model-manager-actions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModelDraft(DEEPSEEK_MODEL_PRESET);
+                      setModelProfileName(modelProfileName || "DeepSeek v4pro");
+                      setModelTestResult(null);
+                    }}
+                  >
+                    DeepSeek v4pro
+                  </button>
+                  <button className="primary" type="submit" disabled={busy.modelProfileAction === "save"}>
+                    {busy.modelProfileAction === "save" ? "保存中..." : "保存/更新"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleApplyModelProfile()}
+                    disabled={selectedModelProfileId === null || busy.modelProfileAction === "apply"}
+                  >
+                    {busy.modelProfileAction === "apply" ? "套用中..." : "套用为当前模型"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteModelProfile()}
+                    disabled={selectedModelProfileId === null || busy.modelProfileAction === "delete"}
+                  >
+                    {busy.modelProfileAction === "delete" ? "删除中..." : "删除"}
+                  </button>
+                </div>
+                <section className="model-route-quick-apply">
+                  <div>
+                    <b>套用到 Agent 路由</b>
+                    <small>将当前选中的模型档案保存到指定 Agent；未选择档案时不会执行。</small>
+                  </div>
+                  {modelRouteApplyOptions.map((option) => (
+                    <div className="model-route-card" key={option.agentName}>
+                      <div>
+                        <b>{option.label}</b>
+                        <small>{option.agentName}</small>
+                        <small>当前：{option.currentModel}</small>
+                        <small>目标：{option.targetModel} / {option.keyStatus}</small>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleApplyProfileToModelRoute(option.agentName, selectedModelProfileId)}
+                        disabled={!option.canApply || busy.modelRouteAgent === option.agentName}
+                      >
+                        {busy.modelRouteAgent === option.agentName ? "套用中..." : "套用到此 Agent"}
+                      </button>
+                    </div>
+                  ))}
+                  {modelRouteApplyOptions.length === 0 ? (
+                    <div className="model-empty">后端还没有返回可配置的 Agent 路由。</div>
+                  ) : null}
+                </section>
+              </form>
+            </div>
+          </aside>
+        </div>
+      ) : null}
       {detailJob ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setDetailJobId(null)}>
           <aside
@@ -1297,6 +2416,36 @@ function App() {
                 </div>
               ) : null}
               <pre>{detailQuality?.displayDescription ?? "当前页面没有提取到完整岗位要求。"}</pre>
+              <div className="manual-detail-editor">
+                <label>
+                  <span>人工补全 / 修正 JD</span>
+                  <textarea
+                    rows={8}
+                    value={manualDetailDrafts[detailJob.id] ?? detailQuality?.displayDescription ?? detailJob.description}
+                    onChange={(event) =>
+                      setManualDetailDrafts((current) => ({ ...current, [detailJob.id]: event.target.value }))
+                    }
+                    placeholder="从 BOSS/实习僧岗位详情页复制完整岗位要求，保存后会重新计算匹配分。"
+                  />
+                </label>
+                <label>
+                  <span>补全备注</span>
+                  <input
+                    value={manualDetailNotes[detailJob.id] ?? ""}
+                    onChange={(event) =>
+                      setManualDetailNotes((current) => ({ ...current, [detailJob.id]: event.target.value }))
+                    }
+                    placeholder="例如：手动从原岗位复制完整 JD"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void handleManualDetailUpdate(detailJob)}
+                  disabled={busy.manualDetailJobId === detailJob.id}
+                >
+                  {busy.manualDetailJobId === detailJob.id ? "重新匹配中" : "保存并重新匹配"}
+                </button>
+              </div>
             </section>
             <section className="split-list">
               <div>

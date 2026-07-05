@@ -1,4 +1,6 @@
 import type {
+  AgentModelRoutesResponse,
+  AgentModelRoute,
   ApplicationAnalytics,
   ApplicationRecord,
   ApplicationSyncRequest,
@@ -9,7 +11,15 @@ import type {
   BrowserJobSearchRequest,
   JobPosting,
   LLMUsageSummary,
+  ManualJobDetailRequest,
+  ModelConfig,
+  ModelProfile,
+  ModelProfilesResponse,
+  ModelConfigTestResult,
+  ModelConfigUpdate,
+  PlatformApplyPreview,
   PlatformSessionsResponse,
+  ResumeManualTextRequest,
   ResumeDraft,
   SearchRun,
   SearchRunRequest,
@@ -27,6 +37,16 @@ class ApiError extends Error {
     this.name = "ApiError";
     this.status = status;
   }
+}
+
+function getTailorBlockedMessage(error: unknown): string | null {
+  if (!(error instanceof ApiError) || error.status !== 409) {
+    return null;
+  }
+  if (!error.message.includes("补全 JD")) {
+    return null;
+  }
+  return error.message;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -49,6 +69,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(message, response.status);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }
 
@@ -59,6 +83,18 @@ export const api = {
     return request<ResumeDraft>("/api/resumes", {
       method: "POST",
       body: formData
+    });
+  },
+
+  getLatestResume(): Promise<ResumeDraft | null> {
+    return request<ResumeDraft | null>("/api/resumes/latest");
+  },
+
+  updateResumeManualText(resumeId: number, rawText: string): Promise<ResumeDraft> {
+    const payload: ResumeManualTextRequest = { raw_text: rawText };
+    return request<ResumeDraft>(`/api/resumes/${encodeURIComponent(resumeId)}/manual-text`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
     });
   },
 
@@ -98,6 +134,13 @@ export const api = {
     });
   },
 
+  updateJobManualDetail(jobId: number, payload: ManualJobDetailRequest): Promise<JobPosting> {
+    return request<JobPosting>(`/api/jobs/${encodeURIComponent(jobId)}/manual-detail`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
   tailorJob(jobId: number, resumeId: number): Promise<TailorBundle> {
     return request<TailorBundle>(`/api/jobs/${jobId}/tailor`, {
       method: "POST",
@@ -113,6 +156,19 @@ export const api = {
     return request<ApplicationRecord>(`/api/jobs/${jobId}/apply-record`, {
       method: "POST",
       body: JSON.stringify({ note })
+    });
+  },
+
+  applyToPlatform(jobId: number, note: string): Promise<ApplicationRecord> {
+    return request<ApplicationRecord>(`/api/jobs/${jobId}/platform-apply`, {
+      method: "POST",
+      body: JSON.stringify({ note })
+    });
+  },
+
+  previewPlatformApply(jobId: number): Promise<PlatformApplyPreview> {
+    return request<PlatformApplyPreview>(`/api/jobs/${jobId}/platform-apply-preview`, {
+      method: "POST"
     });
   },
 
@@ -146,9 +202,67 @@ export const api = {
     return request<LLMUsageSummary>("/api/metrics/llm-usage");
   },
 
+  getModelConfig(): Promise<ModelConfig> {
+    return request<ModelConfig>("/api/model-config");
+  },
+
+  updateModelConfig(payload: ModelConfigUpdate): Promise<ModelConfig> {
+    return request<ModelConfig>("/api/model-config", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  getModelProfiles(): Promise<ModelProfilesResponse> {
+    return request<ModelProfilesResponse>("/api/model-profiles");
+  },
+
+  createModelProfile(name: string, payload: ModelConfigUpdate): Promise<ModelProfile> {
+    return request<ModelProfile>("/api/model-profiles", {
+      method: "POST",
+      body: JSON.stringify({ name, ...payload })
+    });
+  },
+
+  updateModelProfile(profileId: number, name: string, payload: ModelConfigUpdate): Promise<ModelProfile> {
+    return request<ModelProfile>(`/api/model-profiles/${encodeURIComponent(profileId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ name, ...payload })
+    });
+  },
+
+  deleteModelProfile(profileId: number): Promise<void> {
+    return request<void>(`/api/model-profiles/${encodeURIComponent(profileId)}`, {
+      method: "DELETE"
+    });
+  },
+
+  applyModelProfile(profileId: number): Promise<ModelConfig> {
+    return request<ModelConfig>(`/api/model-profiles/${encodeURIComponent(profileId)}/apply`, {
+      method: "POST"
+    });
+  },
+
+  testModelConfigConnection(): Promise<ModelConfigTestResult> {
+    return request<ModelConfigTestResult>("/api/model-config/test", {
+      method: "POST"
+    });
+  },
+
+  getModelRoutes(): Promise<AgentModelRoutesResponse> {
+    return request<AgentModelRoutesResponse>("/api/model-routes");
+  },
+
+  updateModelRoute(agentName: string, payload: ModelConfigUpdate): Promise<AgentModelRoute> {
+    return request<AgentModelRoute>(`/api/model-routes/${encodeURIComponent(agentName)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    });
+  },
+
   getAgentEvents(): Promise<BackendAgentEventsSnapshot> {
     return request<BackendAgentEventsSnapshot>("/api/agent-events");
   }
 };
 
-export { ApiError };
+export { ApiError, getTailorBlockedMessage };

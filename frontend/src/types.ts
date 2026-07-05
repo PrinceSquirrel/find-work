@@ -24,6 +24,10 @@ export interface ResumeDraft {
   created_at: string;
 }
 
+export interface ResumeManualTextRequest {
+  raw_text: string;
+}
+
 export interface JobMatch {
   job_id: number | null;
   score: number;
@@ -47,6 +51,17 @@ export interface JobPosting {
   detail_reason?: string;
   created_at: string;
   match: JobMatch;
+}
+
+export interface PlatformApplyPreview {
+  job: JobPosting;
+  platform: Platform;
+  ready: boolean;
+  status: string;
+  action: string;
+  button_text: string;
+  evidence: string;
+  source_url: string;
 }
 
 export interface SearchRun {
@@ -102,6 +117,17 @@ export interface ApplicationEvent {
   note: string;
 }
 
+export interface ApplicationPlatformProof {
+  platform: string;
+  source_url: string;
+  action: string;
+  status: string;
+  evidence: string;
+  button_text: string;
+  confirmed_at: string | null;
+  page_summary: string;
+}
+
 export interface ApplicationRecord {
   id: number;
   job_id: number;
@@ -114,6 +140,7 @@ export interface ApplicationRecord {
   replied_at: string | null;
   progress_stage: string;
   latest_note: string;
+  platform_proof: ApplicationPlatformProof;
   events: ApplicationEvent[];
 }
 
@@ -149,6 +176,59 @@ export interface LLMUsageSummary {
   total_tokens: number;
   total_cost_usd: number;
   by_agent: Record<string, LLMUsageAgentBucket>;
+}
+
+export interface ModelConfig {
+  provider: string;
+  model: string;
+  base_url: string;
+  api_key_env_var: string;
+  api_key_configured: boolean;
+  enabled: boolean;
+  estimation_only: boolean;
+  timeout_ms: number;
+  input_price_per_million: number;
+  output_price_per_million: number;
+}
+
+export interface ModelConfigUpdate {
+  provider: string;
+  model: string;
+  base_url: string;
+  api_key_env_var: string;
+  enabled: boolean;
+  estimation_only: boolean;
+  timeout_ms: number;
+  input_price_per_million: number;
+  output_price_per_million: number;
+}
+
+export interface ModelProfile extends ModelConfig {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
+export interface ModelProfilesResponse {
+  profiles: ModelProfile[];
+}
+
+export interface ModelConfigTestResult {
+  status: "success" | "failed" | string;
+  provider: string;
+  model: string;
+  duration_ms: number;
+  api_key_configured: boolean;
+  message?: string;
+  error?: string;
+}
+
+export interface AgentModelRoute extends ModelConfig {
+  agent_name: string;
+}
+
+export interface AgentModelRoutesResponse {
+  routes: AgentModelRoute[];
 }
 
 export interface PlatformSession {
@@ -208,6 +288,11 @@ export interface BrowserJobExtractRequest {
 export interface BrowserJobSearchRequest extends BrowserJobExtractRequest {
   keywords: string[];
   city: string;
+}
+
+export interface ManualJobDetailRequest {
+  description: string;
+  note?: string;
 }
 
 export interface BrowserJobExtractResponse {

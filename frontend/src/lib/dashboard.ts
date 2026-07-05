@@ -1,14 +1,19 @@
 import type {
   AnalyticsBucket,
+  AgentModelRoute,
   ApplicationStatus,
+  ApplicationPlatformProof,
   JobFilters,
   JobPosting,
   LLMUsageAgentBucket,
   LLMUsageSummary,
+  ModelProfile,
+  ResumeDraft,
+  TailorBundle,
   UsageCards
 } from "../types";
 
-export type StatusTone = "muted" | "info" | "accent" | "success" | "danger";
+export type StatusTone = "muted" | "info" | "accent" | "success" | "warning" | "danger";
 export type AgentRuntimeStatus = "pending" | "running" | "success" | "failed";
 export type RuntimeAgentName =
   | "ResumeParserAgent"
@@ -109,11 +114,67 @@ export interface OrchestratorSummary {
   detail: string;
 }
 
+export interface TailorModelSummary {
+  statusLabel: string;
+  tone: StatusTone;
+  providerModel: string;
+  routeLabel: string;
+  usageLabel: string;
+  detail: string;
+  errorLabel: string;
+  setupHint: string;
+}
+
+export interface JobMatchModelSummary {
+  statusLabel: string;
+  tone: StatusTone;
+  modelLabel: string;
+  usageLabel: string;
+  detail: string;
+}
+
 export interface JobDetailQuality {
   isComplete: boolean;
   reason: string;
   actionHint: string;
   displayDescription: string;
+}
+
+export interface PlatformConfirmationSummary {
+  confirmed: boolean;
+  evidence: string;
+  sourceUrl: string;
+  note: string;
+  buttonText: string;
+  status: string;
+  confirmedAt: string;
+  pageSummary: string;
+}
+
+export interface PdfTemplateStatus {
+  label: string;
+  tone: StatusTone;
+  detail: string;
+  actionHint: string;
+  canDownload: boolean;
+}
+
+export interface ResumeReadingStatus {
+  label: string;
+  tone: StatusTone;
+  detail: string;
+  actionHint: string;
+  needsManualText: boolean;
+  canGenerateMaterials: boolean;
+}
+
+export interface ModelRouteApplyOption {
+  agentName: string;
+  label: string;
+  currentModel: string;
+  targetModel: string;
+  keyStatus: string;
+  canApply: boolean;
 }
 
 const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
@@ -149,6 +210,51 @@ const AGENT_ORDER: RuntimeAgentName[] = [
   "ApplicationWriterAgent",
   "ReviewAgent"
 ];
+
+export function filterJobsForActiveSearchRun(jobs: JobPosting[], activeSearchRunId: number | null): JobPosting[] {
+  if (activeSearchRunId === null) {
+    return [];
+  }
+  return jobs.filter((job) => job.search_run_id === activeSearchRunId);
+}
+
+export function filterModelProfiles(profiles: ModelProfile[], query: string): ModelProfile[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return profiles;
+  }
+  return profiles.filter((profile) => {
+    const searchable = [
+      profile.name,
+      profile.provider,
+      profile.model,
+      profile.base_url,
+      profile.api_key_env_var
+    ]
+      .join(" ")
+      .toLowerCase();
+    return searchable.includes(normalizedQuery);
+  });
+}
+
+export function buildModelRouteApplyOptions(
+  routes: AgentModelRoute[],
+  selectedProfile: Pick<ModelProfile, "model" | "api_key_configured" | "api_key_env_var"> | null,
+  labels: Record<string, string>
+): ModelRouteApplyOption[] {
+  return routes.map((route) => ({
+    agentName: route.agent_name,
+    label: labels[route.agent_name] ?? route.agent_name,
+    currentModel: route.model || "未配置",
+    targetModel: selectedProfile?.model ?? "未选择模型档案",
+    keyStatus: selectedProfile
+      ? selectedProfile.api_key_configured
+        ? "Key 已配置"
+        : `等待 ${selectedProfile.api_key_env_var || "API Key"}`
+      : "请选择模型档案",
+    canApply: Boolean(selectedProfile)
+  }));
+}
 
 export function rankJobs(jobs: JobPosting[], filters: JobFilters): JobPosting[] {
   const keyword = filters.keyword.trim().toLowerCase();
@@ -312,6 +418,355 @@ export function getJobDetailQuality(job: Pick<JobPosting, "description" | "detai
   };
 }
 
+export function shouldShowTailorRetryAction({
+  job,
+  hasBundle,
+  blockedMessage
+}: {
+  job: Pick<JobPosting, "detail_status"> | null;
+  hasBundle: boolean;
+  blockedMessage: string;
+}): boolean {
+  if (!job || hasBundle || blockedMessage) {
+    return false;
+  }
+  return job.detail_status === "manual_filled" || job.detail_status === "detail_fetched";
+}
+
+export function getPdfTemplateStatus(
+  resume: Pick<ResumeDraft, "file_type" | "template_available"> | null | undefined,
+  hasBundle: boolean,
+  overrideMessage: string | null | undefined
+): PdfTemplateStatus {
+  if (overrideMessage) {
+    return {
+      label: overrideMessage,
+      tone: pdfToneFromMessage(overrideMessage),
+      detail: overrideMessage,
+      actionHint: "",
+      canDownload: Boolean(resume?.template_available && hasBundle)
+    };
+  }
+  if (!hasBundle) {
+    return {
+      label: "模板化 PDF：尚未生成材料",
+      tone: "muted",
+      detail: "请先在岗位列表生成简历改写和招呼语。",
+      actionHint: "生成材料后这里会显示 PDF 下载状态。",
+      canDownload: false
+    };
+  }
+  if (!resume) {
+    return {
+      label: "模板化 PDF：请先上传简历",
+      tone: "warning",
+      detail: "没有可用于套用模板的简历记录。",
+      actionHint: "上传 DOCX 简历可保留原模板排版。",
+      canDownload: false
+    };
+  }
+  if (resume.template_available) {
+    return {
+      label: "模板化 PDF：可下载",
+      tone: "success",
+      detail: "将使用原 DOCX 简历模板，只替换可编辑正文并导出一页 PDF。",
+      actionHint: "下载前后端会校验 PDF 可解析且不超过一页。",
+      canDownload: true
+    };
+  }
+  if (resume.file_type === "pdf") {
+    return {
+      label: "模板化 PDF：PDF 简历可生成材料，但不能保留原 PDF 排版",
+      tone: "warning",
+      detail: "当前 PDF 已可用于简历改写和招呼语生成，但无法安全保留原 PDF 图片、版式和一页模板。",
+      actionHint: "如需模板化一页 PDF，请上传 DOCX 版本简历。",
+      canDownload: false
+    };
+  }
+  return {
+    label: "模板化 PDF：需重新上传 DOCX 简历",
+    tone: "warning",
+    detail: "当前简历没有保存可套用的 DOCX 模板。",
+    actionHint: "上传 DOCX 简历后可以保留头像、基础信息、教育经历和原始排版。",
+    canDownload: false
+  };
+}
+
+export function getResumeReadingStatus(
+  resume: Pick<ResumeDraft, "file_type" | "raw_text" | "profile"> | null | undefined
+): ResumeReadingStatus {
+  if (!resume) {
+    return {
+      label: "读取状态：等待上传",
+      tone: "muted",
+      detail: "上传简历后会显示文本提取、OCR 或手动补全状态。",
+      actionHint: "",
+      needsManualText: false,
+      canGenerateMaterials: false
+    };
+  }
+
+  const profile = asRecord(resume.profile);
+  const extraction = asRecord(profile.extraction);
+  const imageReading = asRecord(profile.image_reading);
+  const reading = Object.keys(imageReading).length > 0 && !Object.keys(extraction).length ? imageReading : extraction;
+  const sourceType = stringValue(reading.source_type);
+  const status = stringValue(reading.status);
+  const message = stringValue(reading.message);
+  const textLength = numberValue(reading.text_length);
+  const manualRequired = reading.manual_text_required === true;
+  const canGenerateMaterials = profile.can_generate_materials === true || (Boolean(resume.raw_text.trim()) && !manualRequired);
+
+  if (sourceType === "manual") {
+    return {
+      label: "读取状态：已手动补全",
+      tone: "success",
+      detail: `已使用你粘贴的简历正文，当前可用于搜索和生成材料。`,
+      actionHint: "",
+      needsManualText: false,
+      canGenerateMaterials: true
+    };
+  }
+
+  if (manualRequired || status === "needs_ocr" || status === "manual_required") {
+    const isImage = resume.file_type === "png" || resume.file_type === "jpg" || resume.file_type === "jpeg" || sourceType.startsWith("image_");
+    return {
+      label: isImage ? "读取状态：图片简历需要补全文本" : "读取状态：需要 OCR 或手动补全",
+      tone: "warning",
+      detail: message || "当前文件没有可直接读取的简历正文，生成材料前需要补全文本。",
+      actionHint: "请在下方粘贴简历正文，保存后会重新提取技能、关键词和城市。",
+      needsManualText: true,
+      canGenerateMaterials: false
+    };
+  }
+
+  if (canGenerateMaterials) {
+    return {
+      label: "读取状态：已提取文本",
+      tone: "success",
+      detail: textLength ? `已提取 ${textLength.toLocaleString("en-US")} 个字符，可用于搜索和生成材料。` : "已提取到可用简历正文。",
+      actionHint: "",
+      needsManualText: false,
+      canGenerateMaterials: true
+    };
+  }
+
+  return {
+    label: "读取状态：需要手动补全",
+    tone: "warning",
+    detail: message || "当前简历正文为空，无法创建有效搜索任务或生成材料。",
+    actionHint: "请粘贴简历正文后保存。",
+    needsManualText: true,
+    canGenerateMaterials: false
+  };
+}
+
+export function getPdfDownloadFailureMessage(status: number, detail: string): string {
+  if (status === 503 || /converter|LibreOffice|Microsoft Word|转换器|soffice/i.test(detail)) {
+    return `模板化 PDF：缺少转换器。${detail}`;
+  }
+  if (/renderer unavailable|render validation|pdftoppm|渲染/i.test(detail)) {
+    return `模板化 PDF：渲染器不可用或渲染检查失败。${detail}`;
+  }
+  if (/DOCX|重新上传/i.test(detail)) {
+    return "模板化 PDF：需重新上传 DOCX 简历以保留模板。";
+  }
+  return `模板化 PDF：${detail}`;
+}
+
+function pdfToneFromMessage(message: string): StatusTone {
+  if (/已生成|开始下载|可下载/.test(message)) {
+    return "success";
+  }
+  if (/失败|缺少|需|不可用|不能/.test(message)) {
+    return "warning";
+  }
+  return "info";
+}
+
+export function extractPlatformConfirmation(note: string | null | undefined): PlatformConfirmationSummary {
+  const text = (note ?? "").trim();
+  const evidence = text.match(/平台确认[:：]\s*([^;；|｜\n]+)/)?.[1]?.trim() ?? "";
+  const sourceUrl = text.match(/平台链接[:：]\s*(https?:\/\/[^;；|｜\s]+)/)?.[1]?.trim() ?? "";
+  const cleanedNote = text
+    .replace(/平台确认[:：]\s*([^;；|｜\n]+)/, "")
+    .replace(/平台链接[:：]\s*(https?:\/\/[^;；|｜\s]+)/, "")
+    .split(/[;；|｜]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("；");
+
+  return {
+    confirmed: Boolean(evidence || sourceUrl),
+    evidence,
+    sourceUrl,
+    note: cleanedNote,
+    buttonText: "",
+    status: "",
+    confirmedAt: "",
+    pageSummary: ""
+  };
+}
+
+export function summarizePlatformConfirmation(
+  proof: Partial<ApplicationPlatformProof> | null | undefined,
+  note: string | null | undefined
+): PlatformConfirmationSummary {
+  const legacy = extractPlatformConfirmation(note);
+  const evidence = stringValue(proof?.evidence);
+  const sourceUrl = stringValue(proof?.source_url);
+  const confirmedAt = stringValue(proof?.confirmed_at);
+  const status = stringValue(proof?.status);
+  const pageSummary = stringValue(proof?.page_summary);
+  const buttonText = stringValue(proof?.button_text);
+  if (!evidence && !sourceUrl && !confirmedAt && !status && !pageSummary && !buttonText) {
+    return legacy;
+  }
+  return {
+    confirmed: true,
+    evidence: evidence || pageSummary || status || legacy.evidence,
+    sourceUrl: sourceUrl || legacy.sourceUrl,
+    note: legacy.note,
+    buttonText,
+    status,
+    confirmedAt,
+    pageSummary
+  };
+}
+
+export function buildTailorModelSummary(
+  bundle: Pick<TailorBundle, "review"> | null | undefined,
+  usage: LLMUsageSummary | null
+): TailorModelSummary {
+  const llm = asRecord(asRecord(bundle?.review).llm);
+  const status = stringValue(llm.status) || "unknown";
+  const provider = stringValue(llm.provider) || "unknown";
+  const model = stringValue(llm.model) || "unknown";
+  const route = asRecord(llm.route);
+  const reviewRoute = asRecord(llm.review_route);
+  const writerMode = stringValue(route.mode) || "unknown";
+  const reviewMode = stringValue(reviewRoute.mode) || "unknown";
+  const reason = stringValue(llm.reason);
+  const error = stringValue(llm.error);
+  const currentTotalTokens = numberValue(llm.total_tokens);
+  const currentCost = numberValue(llm.cost_usd);
+  const currentDurationMs = numberValue(llm.duration_ms);
+  const writerUsage = usage?.by_agent.ApplicationWriterAgent;
+  const totalTokens = Math.round(writerUsage?.total_tokens ?? 0);
+  const totalCost = writerUsage?.total_cost_usd ?? writerUsage?.cost_usd ?? 0;
+  const usageLabel =
+    currentTotalTokens > 0 || currentCost > 0 || currentDurationMs > 0
+      ? `本次 ${Math.round(currentTotalTokens).toLocaleString("en-US")} tokens / $${currentCost.toFixed(4)} / ${Math.round(currentDurationMs)}ms`
+      : totalTokens > 0 || totalCost > 0
+      ? `ApplicationWriterAgent 累计 ${totalTokens.toLocaleString("en-US")} tokens / $${totalCost.toFixed(4)}`
+      : "暂无 token/成本记录";
+
+  if (status === "success") {
+    return {
+      statusLabel: "DeepSeek/API 已调用",
+      tone: "success",
+      providerModel: `${provider} / ${model}`,
+      routeLabel: `ApplicationWriterAgent: ${writerMode}; ReviewAgent: ${reviewMode}`,
+      usageLabel,
+      detail: "材料由外部模型生成，ReviewAgent 继续做事实边界审核。",
+      errorLabel: "",
+      setupHint: ""
+    };
+  }
+
+  if (status === "fallback") {
+    return {
+      statusLabel: "模型调用失败，当前本地回退",
+      tone: "warning",
+      providerModel: `${provider} / ${model}`,
+      routeLabel: `ApplicationWriterAgent: ${writerMode}; ReviewAgent: ${reviewMode}`,
+      usageLabel,
+      detail: "外部模型调用失败，本次材料使用本地规则兜底生成。",
+      errorLabel: error ? `错误：${error}` : "",
+      setupHint: "本次已经尝试调用外部模型但失败；请检查 API Key、base_url、模型名或网络后重新生成。"
+    };
+  }
+
+  if (status === "local") {
+    return {
+      statusLabel: "未接入模型，当前本地规则生成",
+      tone: "muted",
+      providerModel: `${provider} / ${model}`,
+      routeLabel: `ApplicationWriterAgent: ${writerMode}; ReviewAgent: ${reviewMode}`,
+      usageLabel,
+      detail: reason ? `未调用外部模型：${reason}` : "当前模型路由选择本地规则。",
+      errorLabel: "",
+      setupHint: "这不是 DeepSeek/AI 模型输出。请在“模型 / API”面板启用 Agent 路由，并在后端环境变量中配置 API Key。"
+    };
+  }
+
+  return {
+    statusLabel: "模型状态未知",
+    tone: "muted",
+    providerModel: `${provider} / ${model}`,
+    routeLabel: `ApplicationWriterAgent: ${writerMode}; ReviewAgent: ${reviewMode}`,
+    usageLabel,
+    detail: "材料响应里没有可识别的模型调用状态。",
+    errorLabel: error ? `错误：${error}` : "",
+    setupHint: "无法确认本次是否调用模型；请查看 Agent 状态和成本记录。"
+  };
+}
+
+export function buildJobMatchModelSummary(snapshot: BackendAgentEventsSnapshot | null): JobMatchModelSummary | null {
+  const event = (snapshot?.agents ?? []).find((item) => item.agent_name === "JobMatchAgent");
+  if (!event) {
+    return null;
+  }
+  const fields = parseSummaryFields(event.output_summary);
+  const route = fields.route || "local-estimator";
+  const usageStatus = fields.usage_status || "";
+  const tokens = event.total_tokens ?? 0;
+  const usageLabel = tokens > 0 || event.cost_usd > 0
+    ? `${tokens.toLocaleString("en-US")} tokens / $${event.cost_usd.toFixed(4)}`
+    : "暂无 token/成本记录";
+
+  if (usageStatus === "success") {
+    return {
+      statusLabel: "匹配分由模型评分",
+      tone: "success",
+      modelLabel: route,
+      usageLabel,
+      detail: event.output_summary || event.step
+    };
+  }
+
+  if (usageStatus === "failed") {
+    return {
+      statusLabel: "模型评分失败，已规则兜底",
+      tone: "warning",
+      modelLabel: route,
+      usageLabel,
+      detail: event.error || event.output_summary || "搜索任务保留本地规则匹配结果。"
+    };
+  }
+
+  return {
+    statusLabel: "匹配分由本地规则生成",
+    tone: "muted",
+    modelLabel: route,
+    usageLabel,
+    detail: event.output_summary || "未启用 JobMatchAgent 外部模型路由。"
+  };
+}
+
+function parseSummaryFields(summary: string): Record<string, string> {
+  return Object.fromEntries(
+    summary
+      .split(";")
+      .map((part) => part.trim())
+      .map((part) => {
+        const [key, ...rest] = part.split("=");
+        return [key.trim(), rest.join("=").trim()];
+      })
+      .filter(([key, value]) => key && value)
+  );
+}
+
 function normalizeAgentStatus(status: string): AgentRuntimeStatus {
   if (status === "running" || status === "success" || status === "failed") {
     return status;
@@ -363,6 +818,21 @@ function getCurrentStep(agentName: RuntimeAgentName, status: AgentRuntimeStatus)
     ReviewAgent: "检查虚构经历和沟通风险"
   };
   return status === "success" ? "已完成最近一次任务" : steps[agentName];
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function getInputSummary(agentName: RuntimeAgentName, snapshot: AgentRuntimeSnapshot): string {

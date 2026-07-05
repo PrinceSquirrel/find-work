@@ -31,8 +31,16 @@ class MetricsService:
         estimated: bool,
         status: str = "success",
         error: str = "",
+        input_price_per_million: float | None = None,
+        output_price_per_million: float | None = None,
     ) -> LLMUsageEntry:
-        pricing = self.pricing.get(model, ModelPricing(input_per_million=0.0, output_per_million=0.0))
+        pricing = ModelPricing(
+            input_per_million=input_price_per_million,
+            output_per_million=output_price_per_million,
+        ) if input_price_per_million is not None and output_price_per_million is not None else self.pricing.get(
+            model,
+            ModelPricing(input_per_million=0.0, output_per_million=0.0),
+        )
         cost = (prompt_tokens / 1_000_000) * pricing.input_per_million
         cost += (completion_tokens / 1_000_000) * pricing.output_per_million
         entry = LLMUsageEntry(

@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from io import BytesIO
 
 import pytest
 
@@ -69,6 +70,30 @@ def test_resume_parser_agent_extracts_plain_text_and_known_skills_locally():
     )
     assert resume.profile["suggested_keywords"] == ["Python 实习", "FastAPI 实习", "SQL 实习", "数据分析 实习"]
     assert resume.profile["suggested_city"] == "上海"
+
+
+def test_resume_parser_agent_extracts_pdf_text_with_reading_metadata():
+    from reportlab.pdfgen import canvas
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer)
+    pdf.drawString(72, 720, "Skills: Python FastAPI React SQL Agent API")
+    pdf.drawString(72, 700, "Project: local job application agent dashboard")
+    pdf.showPage()
+    pdf.save()
+
+    resume = ResumeParserAgent().parse("resume.pdf", buffer.getvalue())
+
+    assert resume.file_type == "pdf"
+    assert resume.template_available is False
+    assert "Python" in resume.raw_text
+    assert {"Python", "FastAPI", "React", "SQL", "Agent", "API"}.issubset(set(resume.profile["skills"]))
+    assert any("Python" in keyword for keyword in resume.profile["suggested_keywords"])
+    assert resume.profile["can_generate_materials"] is True
+    assert resume.profile["pdf_reading"]["method"] == "pypdf"
+    assert resume.profile["pdf_reading"]["status"] == "success"
+    assert resume.profile["pdf_reading"]["page_count"] == 1
+    assert resume.profile["pdf_reading"]["text_length"] == len(resume.raw_text)
 
 
 def test_job_match_agent_scores_relevant_jobs_higher_than_irrelevant_jobs():

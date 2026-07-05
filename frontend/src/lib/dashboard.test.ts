@@ -3,15 +3,26 @@ import { describe, expect, it } from "vitest";
 import {
   buildAgentStatusRows,
   buildAgentStatusRowsFromEvents,
+  buildJobMatchModelSummary,
+  buildModelRouteApplyOptions,
+  buildTailorModelSummary,
+  getResumeReadingStatus,
+  getPdfDownloadFailureMessage,
+  getPdfTemplateStatus,
+  extractPlatformConfirmation,
+  filterModelProfiles,
+  filterJobsForActiveSearchRun,
   getJobDetailQuality,
+  shouldShowTailorRetryAction,
   buildOrchestratorSummary,
   getAllowedNextStatuses,
   getRatePercent,
   getStatusTone,
   rankJobs,
+  summarizePlatformConfirmation,
   summarizeUsage
 } from "./dashboard";
-import type { AnalyticsBucket, JobPosting, LLMUsageSummary } from "../types";
+import type { AgentModelRoute, AnalyticsBucket, JobPosting, LLMUsageSummary, ModelProfile } from "../types";
 
 const jobs: JobPosting[] = [
   {
@@ -56,6 +67,68 @@ const jobs: JobPosting[] = [
   }
 ];
 
+const modelProfiles: ModelProfile[] = [
+  {
+    id: 1,
+    name: "DeepSeek v4 Pro",
+    provider: "openai-compatible",
+    model: "deepseek-v4-pro",
+    base_url: "https://api.deepseek.com",
+    api_key_env_var: "DEEPSEEK_API_KEY",
+    api_key_configured: true,
+    enabled: true,
+    estimation_only: false,
+    timeout_ms: 90000,
+    input_price_per_million: 1,
+    output_price_per_million: 2,
+    created_at: "2026-07-05T00:00:00Z"
+  },
+  {
+    id: 2,
+    name: "Local Rule",
+    provider: "local",
+    model: "local-rule",
+    base_url: "local",
+    api_key_env_var: "",
+    api_key_configured: false,
+    enabled: false,
+    estimation_only: true,
+    timeout_ms: 1000,
+    input_price_per_million: 0,
+    output_price_per_million: 0,
+    created_at: "2026-07-05T00:00:00Z"
+  }
+];
+
+const modelRoutes: AgentModelRoute[] = [
+  {
+    agent_name: "ApplicationWriterAgent",
+    provider: "local",
+    model: "local-rule",
+    base_url: "local",
+    api_key_env_var: "",
+    api_key_configured: false,
+    enabled: false,
+    estimation_only: true,
+    timeout_ms: 1000,
+    input_price_per_million: 0,
+    output_price_per_million: 0
+  },
+  {
+    agent_name: "JobMatchAgent",
+    provider: "openai-compatible",
+    model: "deepseek-v4-flash",
+    base_url: "https://api.deepseek.com",
+    api_key_env_var: "DEEPSEEK_API_KEY",
+    api_key_configured: true,
+    enabled: true,
+    estimation_only: false,
+    timeout_ms: 45000,
+    input_price_per_million: 0.5,
+    output_price_per_million: 1
+  }
+];
+
 describe("dashboard helpers", () => {
   it("ranks and filters jobs by platform, keyword, and minimum score", () => {
     const ranked = rankJobs(jobs, {
@@ -66,6 +139,57 @@ describe("dashboard helpers", () => {
 
     expect(ranked).toHaveLength(1);
     expect(ranked[0].company).toBe("星河智能科技");
+  });
+
+  it("keeps the job pool empty until a current search run is selected", () => {
+    expect(filterJobsForActiveSearchRun(jobs, null)).toEqual([]);
+    expect(filterJobsForActiveSearchRun(jobs, 10)).toHaveLength(2);
+    expect(filterJobsForActiveSearchRun(jobs, 99)).toEqual([]);
+  });
+
+  it("filters model profiles by name, provider, model, API URL, and key env var", () => {
+    expect(filterModelProfiles(modelProfiles, "")).toHaveLength(2);
+    expect(filterModelProfiles(modelProfiles, "deepseek")).toEqual([modelProfiles[0]]);
+    expect(filterModelProfiles(modelProfiles, "LOCAL")).toEqual([modelProfiles[1]]);
+    expect(filterModelProfiles(modelProfiles, "api.deepseek")).toEqual([modelProfiles[0]]);
+    expect(filterModelProfiles(modelProfiles, "DEEPSEEK_API_KEY")).toEqual([modelProfiles[0]]);
+    expect(filterModelProfiles(modelProfiles, "missing")).toEqual([]);
+  });
+
+  it("builds model route apply options for the selected profile", () => {
+    const options = buildModelRouteApplyOptions(modelRoutes, modelProfiles[0], {
+      ApplicationWriterAgent: "简历/招呼语生成",
+      JobMatchAgent: "岗位匹配评分"
+    });
+
+    expect(options).toEqual([
+      {
+        agentName: "ApplicationWriterAgent",
+        label: "简历/招呼语生成",
+        currentModel: "local-rule",
+        targetModel: "deepseek-v4-pro",
+        keyStatus: "Key 已配置",
+        canApply: true
+      },
+      {
+        agentName: "JobMatchAgent",
+        label: "岗位匹配评分",
+        currentModel: "deepseek-v4-flash",
+        targetModel: "deepseek-v4-pro",
+        keyStatus: "Key 已配置",
+        canApply: true
+      }
+    ]);
+
+    expect(buildModelRouteApplyOptions(modelRoutes, null, {})).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agentName: "ApplicationWriterAgent",
+          targetModel: "未选择模型档案",
+          canApply: false
+        })
+      ])
+    );
   });
 
   it("formats rates from backend analytics buckets as display percentages", () => {
@@ -277,5 +401,306 @@ describe("dashboard helpers", () => {
 
     expect(quality.isComplete).toBe(false);
     expect(quality.reason).toBe("详情页请求失败：HTTP 403。");
+  });
+
+  it("shows tailor retry action only after JD is complete and generation is not blocked", () => {
+    expect(
+      shouldShowTailorRetryAction({
+        job: { ...jobs[0], detail_status: "manual_filled" },
+        hasBundle: false,
+        blockedMessage: ""
+      })
+    ).toBe(true);
+
+    expect(
+      shouldShowTailorRetryAction({
+        job: { ...jobs[0], detail_status: "detail_fetched" },
+        hasBundle: false,
+        blockedMessage: ""
+      })
+    ).toBe(true);
+
+    expect(
+      shouldShowTailorRetryAction({
+        job: { ...jobs[0], detail_status: "card_only" },
+        hasBundle: false,
+        blockedMessage: ""
+      })
+    ).toBe(false);
+
+    expect(
+      shouldShowTailorRetryAction({
+        job: { ...jobs[0], detail_status: "manual_filled" },
+        hasBundle: true,
+        blockedMessage: ""
+      })
+    ).toBe(false);
+
+    expect(
+      shouldShowTailorRetryAction({
+        job: { ...jobs[0], detail_status: "manual_filled" },
+        hasBundle: false,
+        blockedMessage: "该岗位 JD 过短，需要先补全。"
+      })
+    ).toBe(false);
+  });
+
+  it("summarizes material generation model route and usage", () => {
+    const externalSummary = buildTailorModelSummary(
+      {
+        review: {
+          llm: {
+            status: "success",
+            provider: "openai-compatible",
+            model: "deepseek-chat",
+            prompt_tokens: 120,
+            completion_tokens: 60,
+            total_tokens: 180,
+            cost_usd: 0.00024,
+            duration_ms: 88,
+            usage_status: "success",
+            route: { mode: "external" },
+            review_route: { mode: "local_rule" }
+          }
+        }
+      },
+      {
+        total_prompt_tokens: 120,
+        total_completion_tokens: 60,
+        total_tokens: 180,
+        total_cost_usd: 0.0003,
+        by_agent: {
+          ApplicationWriterAgent: {
+            total_tokens: 180,
+            total_cost_usd: 0.0003,
+            success_calls: 1
+          }
+        }
+      }
+    );
+
+    expect(externalSummary.statusLabel).toBe("DeepSeek/API 已调用");
+    expect(externalSummary.providerModel).toBe("openai-compatible / deepseek-chat");
+    expect(externalSummary.routeLabel).toContain("ApplicationWriterAgent: external");
+    expect(externalSummary.routeLabel).toContain("ReviewAgent: local_rule");
+    expect(externalSummary.usageLabel).toBe("本次 180 tokens / $0.0002 / 88ms");
+    expect(externalSummary.setupHint).toBe("");
+    expect(externalSummary.tone).toBe("success");
+
+    const localSummary = buildTailorModelSummary(
+      {
+        review: {
+          llm: {
+            status: "local",
+            provider: "local",
+            model: "local-rule",
+            reason: "API key is not configured",
+            route: { mode: "local_rule" }
+          }
+        }
+      },
+      null
+    );
+
+    expect(localSummary.statusLabel).toBe("未接入模型，当前本地规则生成");
+    expect(localSummary.detail).toContain("API key is not configured");
+    expect(localSummary.setupHint).toContain("这不是 DeepSeek/AI 模型输出");
+    expect(localSummary.setupHint).toContain("模型 / API");
+    expect(localSummary.setupHint).toContain("API Key");
+    expect(localSummary.tone).toBe("muted");
+
+    const fallbackSummary = buildTailorModelSummary(
+      {
+        review: {
+          llm: {
+            status: "fallback",
+            provider: "openai-compatible",
+            model: "deepseek-chat",
+            error: "upstream timeout",
+            route: { mode: "external" }
+          }
+        }
+      },
+      null
+    );
+
+    expect(fallbackSummary.statusLabel).toBe("模型调用失败，当前本地回退");
+    expect(fallbackSummary.errorLabel).toContain("upstream timeout");
+    expect(fallbackSummary.setupHint).toContain("检查 API Key");
+    expect(fallbackSummary.tone).toBe("warning");
+  });
+
+  it("summarizes PDF template readiness for DOCX, PDF, and old resume data", () => {
+    const docxStatus = getPdfTemplateStatus(
+      { file_type: "docx", template_available: true },
+      true,
+      null
+    );
+    const pdfStatus = getPdfTemplateStatus(
+      { file_type: "pdf", template_available: false },
+      true,
+      null
+    );
+    const oldDocxStatus = getPdfTemplateStatus(
+      { file_type: "docx", template_available: false },
+      true,
+      null
+    );
+    const noBundleStatus = getPdfTemplateStatus(
+      { file_type: "docx", template_available: true },
+      false,
+      null
+    );
+
+    expect(docxStatus.canDownload).toBe(true);
+    expect(docxStatus.label).toContain("可下载");
+    expect(docxStatus.tone).toBe("success");
+    expect(pdfStatus.canDownload).toBe(false);
+    expect(pdfStatus.label).toContain("PDF 简历可生成材料");
+    expect(pdfStatus.actionHint).toContain("DOCX");
+    expect(pdfStatus.tone).toBe("warning");
+    expect(oldDocxStatus.canDownload).toBe(false);
+    expect(oldDocxStatus.label).toContain("重新上传 DOCX");
+    expect(noBundleStatus.canDownload).toBe(false);
+    expect(noBundleStatus.label).toContain("尚未生成材料");
+  });
+
+  it("summarizes resume reading status for text, scanned PDF, image, and manual text", () => {
+    const readable = getResumeReadingStatus({
+      file_type: "pdf",
+      raw_text: "技能: Python",
+      profile: {
+        extraction: {
+          source_type: "pdf_text",
+          status: "success",
+          text_length: 10,
+          manual_text_required: false
+        }
+      }
+    });
+    const scanned = getResumeReadingStatus({
+      file_type: "pdf",
+      raw_text: "",
+      profile: {
+        extraction: {
+          source_type: "pdf_scan",
+          status: "needs_ocr",
+          manual_text_required: true,
+          message: "PDF looks like a scanned/image PDF; OCR or manual text is required."
+        }
+      }
+    });
+    const image = getResumeReadingStatus({
+      file_type: "png",
+      raw_text: "",
+      profile: {
+        image_reading: {
+          source_type: "image_png",
+          status: "manual_required",
+          manual_text_required: true
+        }
+      }
+    });
+    const manual = getResumeReadingStatus({
+      file_type: "png",
+      raw_text: "技能: Python",
+      profile: {
+        extraction: {
+          source_type: "manual",
+          status: "success",
+          manual_text_required: false
+        }
+      }
+    });
+
+    expect(readable.label).toBe("读取状态：已提取文本");
+    expect(readable.canGenerateMaterials).toBe(true);
+    expect(scanned.label).toBe("读取状态：需要 OCR 或手动补全");
+    expect(scanned.needsManualText).toBe(true);
+    expect(image.label).toBe("读取状态：图片简历需要补全文本");
+    expect(image.actionHint).toContain("粘贴简历正文");
+    expect(manual.label).toBe("读取状态：已手动补全");
+    expect(manual.tone).toBe("success");
+  });
+
+  it("maps PDF download failures to actionable frontend messages", () => {
+    expect(getPdfDownloadFailureMessage(503, "missing converter")).toContain("缺少转换器");
+    expect(getPdfDownloadFailureMessage(500, "PDF render validation failed: renderer unavailable")).toContain("渲染器不可用");
+    expect(getPdfDownloadFailureMessage(409, "请重新上传 DOCX 简历以保留模板")).toContain("重新上传 DOCX");
+    expect(getPdfDownloadFailureMessage(500, "invalid PDF output")).toContain("invalid PDF output");
+  });
+
+  it("summarizes job match model route from backend agent events", () => {
+    const summary = buildJobMatchModelSummary({
+      current_running_agent: null,
+      total_cost_usd: 0.0024,
+      agents: [
+        {
+          id: 9,
+          agent_name: "JobMatchAgent",
+          status: "success",
+          step: "score matched jobs",
+          input_summary: "resume_id=1; jobs=3",
+          output_summary: "matches=3; route=deepseek-v4-flash; usage_status=success",
+          error: "",
+          total_tokens: 150,
+          cost_usd: 0.00004,
+          created_at: "2026-07-03T10:00:00Z"
+        }
+      ],
+      events: []
+    });
+
+    expect(summary).not.toBeNull();
+    expect(summary?.statusLabel).toBe("匹配分由模型评分");
+    expect(summary?.modelLabel).toBe("deepseek-v4-flash");
+    expect(summary?.usageLabel).toBe("150 tokens / $0.0000");
+    expect(summary?.detail).toContain("matches=3");
+    expect(summary?.tone).toBe("success");
+  });
+
+  it("extracts platform confirmation evidence from application notes", () => {
+    const summary = extractPlatformConfirmation(
+      "已人工核对岗位 JD；平台确认：clicked platform button: 立即沟通；平台链接：https://www.zhipin.com/job_detail/abc.html"
+    );
+
+    expect(summary.confirmed).toBe(true);
+    expect(summary.evidence).toBe("clicked platform button: 立即沟通");
+    expect(summary.sourceUrl).toBe("https://www.zhipin.com/job_detail/abc.html");
+    expect(summary.note).toBe("已人工核对岗位 JD");
+  });
+
+  it("does not mark ordinary application notes as platform-confirmed", () => {
+    const summary = extractPlatformConfirmation("用户手动备注：等待 HR 回复");
+
+    expect(summary.confirmed).toBe(false);
+    expect(summary.evidence).toBe("");
+    expect(summary.sourceUrl).toBe("");
+    expect(summary.note).toBe("用户手动备注：等待 HR 回复");
+  });
+
+  it("prefers structured platform proof over legacy note parsing", () => {
+    const summary = summarizePlatformConfirmation(
+      {
+        platform: "boss",
+        source_url: "https://www.zhipin.com/job_detail/live.html",
+        action: "clicked_apply",
+        status: "applied",
+        evidence: "clicked platform button: 立即沟通",
+        button_text: "立即沟通",
+        confirmed_at: "2026-07-04T13:30:00+08:00",
+        page_summary: "平台页面显示已沟通"
+      },
+      "用户备注；平台确认：old evidence；平台链接：https://old.example/job"
+    );
+
+    expect(summary.confirmed).toBe(true);
+    expect(summary.evidence).toBe("clicked platform button: 立即沟通");
+    expect(summary.sourceUrl).toBe("https://www.zhipin.com/job_detail/live.html");
+    expect(summary.buttonText).toBe("立即沟通");
+    expect(summary.status).toBe("applied");
+    expect(summary.confirmedAt).toBe("2026-07-04T13:30:00+08:00");
+    expect(summary.pageSummary).toBe("平台页面显示已沟通");
+    expect(summary.note).toBe("用户备注");
   });
 });
