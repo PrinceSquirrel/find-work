@@ -4,6 +4,8 @@ import json
 import os
 import re
 import sqlite3
+import base64
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -141,6 +143,8 @@ class SQLiteStore:
                     model TEXT NOT NULL,
                     base_url TEXT NOT NULL,
                     api_key_env_var TEXT NOT NULL,
+                    api_key_ciphertext TEXT NOT NULL DEFAULT '',
+                    api_key_masked TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL,
                     estimation_only INTEGER NOT NULL,
                     timeout_ms INTEGER NOT NULL,
@@ -154,6 +158,8 @@ class SQLiteStore:
                     model TEXT NOT NULL,
                     base_url TEXT NOT NULL,
                     api_key_env_var TEXT NOT NULL,
+                    api_key_ciphertext TEXT NOT NULL DEFAULT '',
+                    api_key_masked TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL,
                     estimation_only INTEGER NOT NULL,
                     timeout_ms INTEGER NOT NULL,
@@ -168,6 +174,8 @@ class SQLiteStore:
                     model TEXT NOT NULL,
                     base_url TEXT NOT NULL,
                     api_key_env_var TEXT NOT NULL,
+                    api_key_ciphertext TEXT NOT NULL DEFAULT '',
+                    api_key_masked TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL,
                     estimation_only INTEGER NOT NULL,
                     timeout_ms INTEGER NOT NULL,
@@ -234,6 +242,7 @@ class SQLiteStore:
             self._ensure_tailored_resume_columns(conn)
             self._ensure_job_detail_columns(conn)
             self._ensure_application_proof_columns(conn)
+            self._ensure_model_secret_columns(conn)
 
     def _ensure_llm_usage_columns(self, conn: sqlite3.Connection) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_usage)").fetchall()}
@@ -269,6 +278,14 @@ class SQLiteStore:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(applications)").fetchall()}
         if "platform_proof_json" not in columns:
             conn.execute("ALTER TABLE applications ADD COLUMN platform_proof_json TEXT NOT NULL DEFAULT '{}'")
+
+    def _ensure_model_secret_columns(self, conn: sqlite3.Connection) -> None:
+        for table in ("model_config", "model_profiles", "agent_model_routes"):
+            columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if "api_key_ciphertext" not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN api_key_ciphertext TEXT NOT NULL DEFAULT ''")
+            if "api_key_masked" not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN api_key_masked TEXT NOT NULL DEFAULT ''")
 
     def reindex_knowledge(self) -> KnowledgeReindexResponse:
         now = datetime.now(UTC).isoformat()
@@ -533,25 +550,36 @@ class SQLiteStore:
     def save_model_config(self, update: ModelConfigUpdate) -> ModelConfig:
         update_payload = update.model_dump()
         update_payload["model"] = _normalize_model_name(update_payload["model"])
+        update_payload.pop("api_key", None)
+        api_key_ciphertext, api_key_masked = self._resolve_model_secret(
+            update.api_key,
+            self._current_model_secret("model_config", "id = 1"),
+        )
+        api_key = self._decrypt_api_key(api_key_ciphertext)
         config = ModelConfig(
             **update_payload,
-            api_key_configured=self._is_env_configured(update.api_key_env_var),
+            api_key=api_key,
+            api_key_secret_id="model_config:1" if api_key_ciphertext else "",
+            api_key_masked=api_key_masked,
+            api_key_configured=bool(api_key) or self._is_env_configured(update.api_key_env_var),
             updated_at=datetime.now(UTC),
         )
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO model_config (
-                    id, provider, model, base_url, api_key_env_var, enabled,
-                    estimation_only, timeout_ms, input_price_per_million,
-                    output_price_per_million, updated_at
+                    id, provider, model, base_url, api_key_env_var, api_key_ciphertext,
+                    api_key_masked, enabled, estimation_only, timeout_ms,
+                    input_price_per_million, output_price_per_million, updated_at
                 )
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     provider = excluded.provider,
                     model = excluded.model,
                     base_url = excluded.base_url,
                     api_key_env_var = excluded.api_key_env_var,
+                    api_key_ciphertext = excluded.api_key_ciphertext,
+                    api_key_masked = excluded.api_key_masked,
                     enabled = excluded.enabled,
                     estimation_only = excluded.estimation_only,
                     timeout_ms = excluded.timeout_ms,
@@ -564,6 +592,8 @@ class SQLiteStore:
                     config.model,
                     config.base_url,
                     config.api_key_env_var,
+                    api_key_ciphertext,
+                    api_key_masked,
                     1 if config.enabled else 0,
                     1 if config.estimation_only else 0,
                     config.timeout_ms,
@@ -583,16 +613,18 @@ class SQLiteStore:
         now = datetime.now(UTC)
         update_payload = update.model_dump()
         update_payload["model"] = _normalize_model_name(update_payload["model"])
+        api_key_ciphertext, api_key_masked = self._resolve_model_secret(update.api_key, None)
+        update_payload.pop("api_key", None)
         with self._connect() as conn:
             try:
                 cursor = conn.execute(
                     """
                     INSERT INTO model_profiles (
-                        name, provider, model, base_url, api_key_env_var, enabled,
-                        estimation_only, timeout_ms, input_price_per_million,
-                        output_price_per_million, created_at, updated_at
+                        name, provider, model, base_url, api_key_env_var, api_key_ciphertext,
+                        api_key_masked, enabled, estimation_only, timeout_ms,
+                        input_price_per_million, output_price_per_million, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         update_payload["name"],
@@ -600,6 +632,8 @@ class SQLiteStore:
                         update_payload["model"],
                         update_payload["base_url"],
                         update_payload["api_key_env_var"],
+                        api_key_ciphertext,
+                        api_key_masked,
                         1 if update_payload["enabled"] else 0,
                         1 if update_payload["estimation_only"] else 0,
                         update_payload["timeout_ms"],
@@ -620,6 +654,11 @@ class SQLiteStore:
         now = datetime.now(UTC)
         update_payload = update.model_dump()
         update_payload["model"] = _normalize_model_name(update_payload["model"])
+        api_key_ciphertext, api_key_masked = self._resolve_model_secret(
+            update.api_key,
+            self._current_model_secret("model_profiles", "id = ?", (profile_id,)),
+        )
+        update_payload.pop("api_key", None)
         with self._connect() as conn:
             try:
                 cursor = conn.execute(
@@ -630,6 +669,8 @@ class SQLiteStore:
                         model = ?,
                         base_url = ?,
                         api_key_env_var = ?,
+                        api_key_ciphertext = ?,
+                        api_key_masked = ?,
                         enabled = ?,
                         estimation_only = ?,
                         timeout_ms = ?,
@@ -644,6 +685,8 @@ class SQLiteStore:
                         update_payload["model"],
                         update_payload["base_url"],
                         update_payload["api_key_env_var"],
+                        api_key_ciphertext,
+                        api_key_masked,
                         1 if update_payload["enabled"] else 0,
                         1 if update_payload["estimation_only"] else 0,
                         update_payload["timeout_ms"],
@@ -680,6 +723,7 @@ class SQLiteStore:
                 model=profile.model,
                 base_url=profile.base_url,
                 api_key_env_var=profile.api_key_env_var,
+                api_key=profile.api_key,
                 enabled=profile.enabled,
                 estimation_only=profile.estimation_only,
                 timeout_ms=profile.timeout_ms,
@@ -706,26 +750,37 @@ class SQLiteStore:
         self._validate_model_route_agent(agent_name)
         update_payload = update.model_dump()
         update_payload["model"] = _normalize_model_name(update_payload["model"])
+        api_key_ciphertext, api_key_masked = self._resolve_model_secret(
+            update.api_key,
+            self._current_model_secret("agent_model_routes", "agent_name = ?", (agent_name,)),
+        )
+        api_key = self._decrypt_api_key(api_key_ciphertext)
+        update_payload.pop("api_key", None)
         route = AgentModelRoute(
             agent_name=agent_name,
             **update_payload,
-            api_key_configured=self._is_env_configured(update.api_key_env_var),
+            api_key=api_key,
+            api_key_secret_id=f"agent_model_route:{agent_name}" if api_key_ciphertext else "",
+            api_key_masked=api_key_masked,
+            api_key_configured=bool(api_key) or self._is_env_configured(update.api_key_env_var),
             updated_at=datetime.now(UTC),
         )
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO agent_model_routes (
-                    agent_name, provider, model, base_url, api_key_env_var, enabled,
-                    estimation_only, timeout_ms, input_price_per_million,
-                    output_price_per_million, updated_at
+                    agent_name, provider, model, base_url, api_key_env_var, api_key_ciphertext,
+                    api_key_masked, enabled, estimation_only, timeout_ms,
+                    input_price_per_million, output_price_per_million, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(agent_name) DO UPDATE SET
                     provider = excluded.provider,
                     model = excluded.model,
                     base_url = excluded.base_url,
                     api_key_env_var = excluded.api_key_env_var,
+                    api_key_ciphertext = excluded.api_key_ciphertext,
+                    api_key_masked = excluded.api_key_masked,
                     enabled = excluded.enabled,
                     estimation_only = excluded.estimation_only,
                     timeout_ms = excluded.timeout_ms,
@@ -739,6 +794,8 @@ class SQLiteStore:
                     route.model,
                     route.base_url,
                     route.api_key_env_var,
+                    api_key_ciphertext,
+                    api_key_masked,
                     1 if route.enabled else 0,
                     1 if route.estimation_only else 0,
                     route.timeout_ms,
@@ -1360,12 +1417,17 @@ class SQLiteStore:
 
     def _model_config_from_row(self, row: sqlite3.Row) -> ModelConfig:
         api_key_env_var = row["api_key_env_var"]
+        api_key_ciphertext = row["api_key_ciphertext"]
+        api_key = self._decrypt_api_key(api_key_ciphertext)
         return ModelConfig(
             provider=row["provider"],
             model=_normalize_model_name(row["model"]),
             base_url=row["base_url"],
             api_key_env_var=api_key_env_var,
-            api_key_configured=self._is_env_configured(api_key_env_var),
+            api_key=api_key,
+            api_key_secret_id="model_config:1" if api_key_ciphertext else "",
+            api_key_masked=row["api_key_masked"],
+            api_key_configured=bool(api_key) or self._is_env_configured(api_key_env_var),
             enabled=bool(row["enabled"]),
             estimation_only=bool(row["estimation_only"]),
             timeout_ms=row["timeout_ms"],
@@ -1376,6 +1438,8 @@ class SQLiteStore:
 
     def _model_profile_from_row(self, row: sqlite3.Row) -> ModelProfile:
         api_key_env_var = row["api_key_env_var"]
+        api_key_ciphertext = row["api_key_ciphertext"]
+        api_key = self._decrypt_api_key(api_key_ciphertext)
         return ModelProfile(
             id=row["id"],
             name=row["name"],
@@ -1383,7 +1447,10 @@ class SQLiteStore:
             model=_normalize_model_name(row["model"]),
             base_url=row["base_url"],
             api_key_env_var=api_key_env_var,
-            api_key_configured=self._is_env_configured(api_key_env_var),
+            api_key=api_key,
+            api_key_secret_id=f"model_profile:{row['id']}" if api_key_ciphertext else "",
+            api_key_masked=row["api_key_masked"],
+            api_key_configured=bool(api_key) or self._is_env_configured(api_key_env_var),
             enabled=bool(row["enabled"]),
             estimation_only=bool(row["estimation_only"]),
             timeout_ms=row["timeout_ms"],
@@ -1396,7 +1463,10 @@ class SQLiteStore:
     def _default_agent_model_route(self, agent_name: str) -> AgentModelRoute:
         self._validate_model_route_agent(agent_name)
         if agent_name == "ApplicationWriterAgent":
-            return AgentModelRoute(agent_name=agent_name, **self.get_model_config().model_dump())
+            config = self.get_model_config()
+            payload = config.model_dump()
+            payload["api_key"] = config.api_key
+            return AgentModelRoute(agent_name=agent_name, **payload)
         return AgentModelRoute(
             agent_name=agent_name,
             provider="local",
@@ -1414,13 +1484,18 @@ class SQLiteStore:
 
     def _agent_model_route_from_row(self, row: sqlite3.Row) -> AgentModelRoute:
         api_key_env_var = row["api_key_env_var"]
+        api_key_ciphertext = row["api_key_ciphertext"]
+        api_key = self._decrypt_api_key(api_key_ciphertext)
         return AgentModelRoute(
             agent_name=row["agent_name"],
             provider=row["provider"],
             model=_normalize_model_name(row["model"]),
             base_url=row["base_url"],
             api_key_env_var=api_key_env_var,
-            api_key_configured=self._is_env_configured(api_key_env_var),
+            api_key=api_key,
+            api_key_secret_id=f"agent_model_route:{row['agent_name']}" if api_key_ciphertext else "",
+            api_key_masked=row["api_key_masked"],
+            api_key_configured=bool(api_key) or self._is_env_configured(api_key_env_var),
             enabled=bool(row["enabled"]),
             estimation_only=bool(row["estimation_only"]),
             timeout_ms=row["timeout_ms"],
@@ -1433,10 +1508,76 @@ class SQLiteStore:
         if agent_name not in MODEL_ROUTE_AGENTS:
             raise ValueError(f"Unsupported model route agent: {agent_name}")
 
+    def _current_model_secret(
+        self,
+        table: str,
+        where_clause: str,
+        parameters: tuple[Any, ...] = (),
+    ) -> tuple[str, str] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT api_key_ciphertext, api_key_masked FROM {table} WHERE {where_clause}",
+                parameters,
+            ).fetchone()
+        if row is None:
+            return None
+        return row["api_key_ciphertext"], row["api_key_masked"]
+
+    def _resolve_model_secret(
+        self,
+        api_key: str,
+        current_secret: tuple[str, str] | None,
+    ) -> tuple[str, str]:
+        secret = api_key.strip()
+        if secret:
+            return self._encrypt_api_key(secret), _mask_api_key(secret)
+        if current_secret is not None:
+            return current_secret
+        return "", ""
+
+    def _encrypt_api_key(self, api_key: str) -> str:
+        encrypted = self._xor_secret(api_key.encode("utf-8"))
+        return "v1:" + base64.urlsafe_b64encode(encrypted).decode("ascii")
+
+    def _decrypt_api_key(self, ciphertext: str) -> str:
+        if not ciphertext:
+            return ""
+        if not ciphertext.startswith("v1:"):
+            return ""
+        try:
+            encrypted = base64.urlsafe_b64decode(ciphertext[3:].encode("ascii"))
+            return self._xor_secret(encrypted).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return ""
+
+    def _xor_secret(self, payload: bytes) -> bytes:
+        key = self._local_secret_key()
+        stream = bytearray()
+        counter = 0
+        while len(stream) < len(payload):
+            stream.extend(hashlib.sha256(key + counter.to_bytes(4, "big")).digest())
+            counter += 1
+        return bytes(value ^ stream[index] for index, value in enumerate(payload))
+
+    def _local_secret_key(self) -> bytes:
+        seed = "|".join(
+            [
+                "agent-business-local-secret-v1",
+                os.getenv("AGENT_BUSINESS_SECRET_SALT", ""),
+                os.getenv("USERNAME", os.getenv("USER", "")),
+                os.getenv("COMPUTERNAME", ""),
+            ]
+        )
+        return hashlib.sha256(seed.encode("utf-8")).digest()
+
     def _is_env_configured(self, name: str) -> bool:
+        if not name:
+            return False
         return bool(self._env_value(name))
 
     def _env_value(self, name: str) -> str:
+        if not name:
+            return ""
         value = os.getenv(name, "")
         if value:
             return value
@@ -1535,6 +1676,14 @@ def _candidate_env_files() -> list[Path]:
     if configured:
         return [Path(configured)]
     return [Path(r"D:\code\tourism-opinion-agent\.env")]
+
+
+def _mask_api_key(api_key: str) -> str:
+    if not api_key:
+        return ""
+    if len(api_key) <= 4:
+        return "*" * len(api_key)
+    return "*" * min(12, max(4, len(api_key) - 4)) + api_key[-4:]
 
 
 def _normalize_model_name(model: str) -> str:

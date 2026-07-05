@@ -1519,6 +1519,73 @@ def test_model_config_can_be_saved_without_exposing_api_key(tmp_path, monkeypatc
     assert "secret-value-that-must-not-leak" not in str(persisted)
 
 
+def test_model_config_accepts_saved_api_key_without_leaking_plaintext(tmp_path, monkeypatch):
+    import app.main as main_module
+
+    secret = "sk-live-secret-1234567890"
+
+    class FakeOpenAICompatibleClient:
+        def test_connection(self, config):
+            assert config.api_key == secret
+            assert config.api_key_env_var == ""
+            return {
+                "status": "success",
+                "provider": config.provider,
+                "model": config.model,
+                "duration_ms": 17,
+                "message": "model connection ok",
+            }
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(main_module, "OpenAICompatibleClient", FakeOpenAICompatibleClient)
+    db_path = tmp_path / "agent-business.sqlite3"
+    app = create_app(db_path=db_path)
+    client = TestClient(app)
+
+    update_response = client.put(
+        "/api/model-config",
+        json={
+            "provider": "openai-compatible",
+            "model": "deepseek-chat",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key_env_var": "",
+            "api_key": secret,
+            "enabled": True,
+            "estimation_only": False,
+            "timeout_ms": 45000,
+            "input_price_per_million": 1.0,
+            "output_price_per_million": 2.0,
+        },
+    )
+
+    assert update_response.status_code == 200
+    saved = update_response.json()
+    assert saved["api_key_env_var"] == ""
+    assert saved["api_key_configured"] is True
+    assert saved["api_key_secret_id"] == "model_config:1"
+    assert saved["api_key_masked"].endswith("7890")
+    assert "api_key" not in saved
+    assert secret not in str(saved)
+
+    persisted = client.get("/api/model-config").json()
+    assert persisted["api_key_configured"] is True
+    assert persisted["api_key_masked"].endswith("7890")
+    assert secret not in str(persisted)
+
+    with sqlite3.connect(db_path) as conn:
+        raw_rows = conn.execute("SELECT * FROM model_config").fetchall()
+    assert secret not in str(raw_rows)
+
+    test_response = client.post("/api/model-config/test")
+
+    assert test_response.status_code == 200
+    payload = test_response.json()
+    assert payload["status"] == "success"
+    assert payload["api_key_configured"] is True
+    assert secret not in str(payload)
+
+
 def test_model_profiles_can_be_created_updated_applied_and_deleted(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_BUSINESS_TEST_API_KEY", "secret-value-that-must-not-leak")
     app = create_app(db_path=tmp_path / "agent-business.sqlite3")

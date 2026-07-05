@@ -1,5 +1,46 @@
 # Codex Recovery Status
 
+## 7G-1：后端真实 API Key 本地保存
+### 当前真实状态
+- `/api/model-config` 现在可以接收真实 `api_key`，也允许 `api_key_env_var=""`，不再强迫用户填写环境变量名。
+- API Key 会以本地派生密钥处理后的密文写入 SQLite，响应中不会返回明文，只返回 `api_key_configured`、`api_key_secret_id` 和脱敏尾号 `api_key_masked`。
+- `OpenAICompatibleClient` 调用模型时会优先使用已保存的隐藏 Key；没有保存 Key 时继续兼容旧的环境变量 / 外部 `.env` 读取方式。
+- 模型档案和 Agent 模型路由也已经具备同样的密文字段，后续前端简化模型选择器可以直接复用。
+
+### 已完成
+- `ModelConfig` / `ModelProfile` / `AgentModelRoute` 增加隐藏 `api_key`、`api_key_secret_id`、`api_key_masked`。
+- `ModelConfigUpdate` 支持真实 `api_key` 输入，并允许空 `api_key_env_var`。
+- SQLite 自动迁移 `model_config`、`model_profiles`、`agent_model_routes` 的密文和掩码字段。
+- 保存模型配置时不会把明文 Key 写入普通配置字段；读取时只在后端内存对象中恢复隐藏 Key。
+- 后端测试覆盖：真实 Key 保存、响应不泄露明文、SQLite 不出现明文、测试连接能拿到保存 Key。
+
+### 未完成
+- 前端模型/API 面板还没有简化成“选择服务商/模型 + 输入真实 Key + 显示/隐藏 + 删除”的新界面。
+- 还没有实现单独删除已保存 API Key 的接口；当前空 Key 更新会保留已有 Key。
+- 本阶段未引入 Windows DPAPI；当前使用项目内本地派生密钥处理 SQLite 中的 Key，后续可升级为 DPAPI 或系统凭据库。
+
+### 风险
+- 本地派生密钥适合本地单用户第一版，不能等同于企业云端 KMS。
+- 如果更换系统用户或机器，旧 SQLite 中保存的 Key 可能无法恢复，需要重新填写。
+- 前端旧 UI 仍显示环境变量相关文案，下一阶段需要收敛，否则用户体验仍会显得复杂。
+
+### 下一步任务
+- 7G-2：把前端模型/API 面板改成简单模式：服务商、模型、真实 Key、保存、测试、删除/隐藏。
+- 7G-3：增加总模型大脑 `OrchestratorAgent` 和简洁模型路由表。
+- 7H：新增一眼看懂的系统状态 / 后端控制台。
+
+### 最近修改文件
+- `backend/app/schemas.py`
+- `backend/app/storage.py`
+- `backend/app/services/llm_client_service.py`
+- `backend/tests/test_api_flow.py`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+- 红测：`python -m pytest backend\tests\test_api_flow.py::test_model_config_accepts_saved_api_key_without_leaking_plaintext -q` 先失败于 422，暴露后端仍强制环境变量名。
+- 绿测：同一命令通过。
+- 相关回归：`python -m pytest backend\tests\test_api_flow.py -k "model_config or model_profiles or model_route or model_connection or tailor_uses_enabled_openai or tailor_uses_application_writer" -q` 通过，14 条相关后端测试通过。
+
 ## 7F-2：前端定制简历在线编辑与实时预览
 ### 当前真实状态
 - 人审材料区现在把“简历改写要求”升级为“在线编辑 / 预览”。

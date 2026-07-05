@@ -157,9 +157,12 @@ class OpenAICompatibleClient:
     def _api_key(self, config: ModelConfig) -> str:
         if not config.enabled or config.estimation_only:
             raise LLMClientUnavailable("LLM model config is disabled or estimation-only")
+        if config.api_key:
+            return config.api_key
         api_key = _env_value(config.api_key_env_var)
         if not api_key:
-            raise LLMClientUnavailable(f"API key env var is not configured: {config.api_key_env_var}")
+            target = config.api_key_env_var or "saved API key"
+            raise LLMClientUnavailable(f"API key is not configured: {target}")
         return api_key
 
     def _parse_response(

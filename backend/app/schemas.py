@@ -160,6 +160,9 @@ class ModelConfig(BaseModel):
     model: str = "local-estimator"
     base_url: str = "https://api.openai.com/v1"
     api_key_env_var: str = "OPENAI_API_KEY"
+    api_key: str = Field(default="", exclude=True)
+    api_key_secret_id: str = ""
+    api_key_masked: str = ""
     api_key_configured: bool = False
     enabled: bool = False
     estimation_only: bool = True
@@ -173,7 +176,8 @@ class ModelConfigUpdate(BaseModel):
     provider: str = Field(min_length=1, max_length=80)
     model: str = Field(min_length=1, max_length=120)
     base_url: str = Field(min_length=1, max_length=300)
-    api_key_env_var: str = Field(default="OPENAI_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    api_key_env_var: str = Field(default="OPENAI_API_KEY", pattern=r"^$|^[A-Za-z_][A-Za-z0-9_]*$")
+    api_key: str = Field(default="", max_length=5000)
     enabled: bool = False
     estimation_only: bool = True
     timeout_ms: int = Field(default=30000, ge=1000, le=300000)
