@@ -2695,3 +2695,31 @@ Updated: 2026-07-03 Asia/Shanghai
 - 全量后端：`python -m pytest -q` 通过；仅有 reportlab 的 Python 3.14 deprecation warning。
 - 空白检查：`git diff --check` 通过；仅有 Windows 行尾转换提示。
 - 本机 CDP 冒烟：`BROWSER_CDP_URL=127.0.0.1:9222` 下 BOSS 抽取返回 `boss success 107 5`，前 5 条均为真实岗位且薪资可读。
+
+## 2026-09-03：强制测试、提交与 GitHub 同步规则（partial）
+
+### 当前真实状态
+
+- 已确认当前项目远程仓库为 `https://github.com/PrinceSquirrel/find-work.git`，当前分支为 `codex/resume-model-ops-stage`。
+- 已把“功能改动必须补测试、全部验证通过后提交、每个提交立即推送并核对远程 HEAD”的要求写入 `AGENTS.md`。
+- 新增仓库策略自动化测试，防止后续误删上述规则。
+- 规则提交 `3d8c5cd` 已推送到 `origin/codex/resume-model-ops-stage`，远程 HEAD 与本地 HEAD 一致。
+- 两张新截图尚未分析；已向用户请求本轮截图发送确认，在确认前不会依据截图修改 Demo 或正式页面。
+
+### 修改文件
+
+- `AGENTS.md`
+- `backend/tests/test_repository_policy.py`
+- `docs/CODEX_STATUS.md`
+
+### 验证结果
+
+- `python -m pytest backend/tests/test_repository_policy.py`：`1 passed`。
+- `git diff --check -- AGENTS.md backend/tests/test_repository_policy.py`：通过，仅有 Windows 行尾提示。
+- `git ls-remote` 核对：本地与远程均为 `3d8c5cda942ffe343054b1677c56efc3d1537284`。
+
+### 剩余事项 / 下一步
+
+- 等待用户确认发送两张截图；确认后先修改独立 Demo，包括移走截图圈选区域、导航悬停显隐、组件悬停高亮、首页搜索栏和产品功能简介。
+- Demo 修改需新增自动化测试、浏览器验收、提交并推送；随后再将确认后的设计迁移到完整 React 项目。
+- 正式项目迁移完成后必须运行后端全量测试、前端全量测试、静态检查、生产构建和浏览器响应式验证，全部通过后才能最终交付。
