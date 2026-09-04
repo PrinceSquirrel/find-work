@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200" role="img" aria-labelledby="logo-title logo-description">
+  <title id="logo-title">松鼠世界原创 Logo</title>
+  <desc id="logo-description">一只可爱松鼠环抱橡果形幻想星球，蓬松尾巴围成世界，搭配准确的中文名称松鼠世界。</desc>
+
+  <defs>
+    <linearGradient id="world-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0B7169"/>
+      <stop offset="1" stop-color="#0B3E3B"/>
+    </linearGradient>
+    <linearGradient id="tail-orange" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF9A3D"/>
+      <stop offset="1" stop-color="#E85D2A"/>
+    </linearGradient>
+    <linearGradient id="planet-green" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#A8E76A"/>
+      <stop offset="0.55" stop-color="#35B88B"/>
+      <stop offset="1" stop-color="#168A88"/>
+    </linearGradient>
+    <filter id="soft-shadow" x="-25%" y="-25%" width="150%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="14" flood-color="#3A160B" flood-opacity="0.22"/>
+    </filter>
+    <filter id="small-glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g id="emblem" filter="url(#soft-shadow)">
+    <g id="fantasy-world-layer">
+      <circle cx="650" cy="410" r="302" fill="url(#world-sky)" stroke="#552415" stroke-width="24"/>
+      <path d="M398 514c46-80 105-110 160-68 45-72 112-58 146 1 48-44 109-18 133 42v86H398z" fill="#56B6A0" opacity=".62"/>
+      <path d="M360 625l102-169 54 89 70-126 82 145 62-105 124 166z" fill="#07524D"/>
+      <path d="M414 625l72-121 31 52 69-123 44 78 35-59 99 173z" fill="#0A625A"/>
+      <path d="M430 620h438v70H430z" fill="#114E3E"/>
+      <path d="M790 211a75 75 0 1 0 66 110 88 88 0 1 1-66-110z" fill="#FFD65A"/>
+      <g id="stars" fill="#FFD65A">
+        <path d="M686 222l10 24 24 10-24 10-10 24-10-24-24-10 24-10z"/>
+        <path d="M885 365l8 19 19 8-19 8-8 19-8-19-19-8 19-8z"/>
+        <circle cx="742" cy="315" r="8"/>
+        <circle cx="842" cy="273" r="7"/>
+        <circle cx="624" cy="206" r="6"/>
+      </g>
+      <g id="floating-leaves" stroke="#07524D" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M851 451c-72-18-108-67-102-132 69 4 116 43 125 111-5 13-12 19-23 21z" fill="#84D35A"/>
+        <path d="M764 334l84 88" fill="none"/>
+        <path d="M432 308c-24-65-3-114 55-145 34 59 23 114-31 153-12 0-20-2-24-8z" fill="#2FB48D"/>
+        <path d="M477 181l-35 112" fill="none"/>
+      </g>
+    </g>
+
+    <g id="tail-layer">
+      <path d="M401 585C246 412 302 149 512 77c203-70 439 32 514 233 72 190 6 403-151 507-110 74-260 82-370 26 118 3 222-52 276-144 59-101 53-233-20-324-76-94-205-132-320-91-125 45-195 170-166 301 15 66 56 128 126 171-61-26-106-82-124-148-2-8 1-17 8-23 34-28 82-28 116 0z" fill="url(#tail-orange)" stroke="#552415" stroke-width="28" stroke-linejoin="round"/>
+      <path d="M485 106c156-56 342 7 434 143-85-69-196-92-297-61-117 35-203 132-224 246-17-96 15-205 87-328z" fill="#FFB14E" opacity=".75"/>
+      <path d="M943 606c-27 110-117 197-231 221 82-52 134-136 144-229 8-80-15-157-64-217 107 41 178 121 151 225z" fill="#FFF0C8"/>
+      <path d="M926 613c-42 81-103 139-184 174 50-47 82-107 94-172 8-46 6-91-5-132 68 34 119 77 95 130z" fill="#FFE2A9"/>
+    </g>
+
+    <g id="squirrel-layer">
+      <ellipse cx="419" cy="708" rx="169" ry="151" fill="#E86E2D" stroke="#552415" stroke-width="24"/>
+      <ellipse cx="426" cy="723" rx="91" ry="113" fill="#FFF0C8"/>
+      <path d="M296 414l-94-88c-20-19-10-53 17-58 80-14 139 31 156 107z" fill="#ED7631" stroke="#552415" stroke-width="24" stroke-linejoin="round"/>
+      <path d="M279 393l-51-50c39-2 75 18 94 51z" fill="#FF9C91"/>
+      <path d="M419 346l31-119c8-30 45-40 67-17 56 58 54 134 11 197z" fill="#ED7631" stroke="#552415" stroke-width="24" stroke-linejoin="round"/>
+      <path d="M454 347l19-76c25 29 30 68 16 102z" fill="#FF9C91"/>
+      <path d="M291 353c83-64 215-47 280 36 65 84 43 203-51 267-95 65-227 38-285-57-51-83-26-183 56-246z" fill="#F47C32" stroke="#552415" stroke-width="24"/>
+      <path d="M266 501c26-88 127-142 221-101 79 34 114 124 76 202-39 79-134 113-217 78-77-32-113-106-80-179z" fill="#FFF0C8"/>
+      <path d="M324 400c34-31 75-44 119-37-48 4-81 24-102 60z" fill="#FFAE49"/>
+      <g id="face">
+        <ellipse cx="337" cy="500" rx="51" ry="68" fill="#FFF" stroke="#552415" stroke-width="12"/>
+        <ellipse cx="464" cy="486" rx="51" ry="68" fill="#FFF" stroke="#552415" stroke-width="12"/>
+        <ellipse cx="345" cy="514" rx="27" ry="39" fill="#57210F"/>
+        <ellipse cx="471" cy="500" rx="27" ry="39" fill="#57210F"/>
+        <circle cx="356" cy="497" r="10" fill="#FFF"/>
+        <circle cx="482" cy="482" r="10" fill="#FFF"/>
+        <path d="M386 554c15-10 31-10 46 0-4 18-12 27-23 27s-19-9-23-27z" fill="#6A2A17"/>
+        <path d="M409 580c-10 23-31 29-48 13m48-13c9 24 32 30 49 13" fill="none" stroke="#552415" stroke-width="10" stroke-linecap="round"/>
+        <path d="M389 606c15 18 28 18 43 0-3 31-39 31-43 0z" fill="#F48A8A"/>
+      </g>
+      <path d="M328 672c38-58 95-72 140-35l61 52c17 15 17 42 1 58-16 15-42 14-57-2l-48-49c-20 27-39 50-64 67-45-2-68-46-33-91z" fill="#E86E2D" stroke="#552415" stroke-width="20" stroke-linejoin="round"/>
+      <ellipse cx="330" cy="826" rx="70" ry="39" fill="#FFF0C8" stroke="#552415" stroke-width="19"/>
+      <ellipse cx="493" cy="828" rx="70" ry="39" fill="#FFF0C8" stroke="#552415" stroke-width="19"/>
+    </g>
+
+    <g id="acorn-world-layer">
+      <circle cx="589" cy="666" r="90" fill="#FFD65A" opacity=".46" filter="url(#small-glow)"/>
+      <circle cx="589" cy="666" r="72" fill="url(#planet-green)" stroke="#552415" stroke-width="14"/>
+      <path d="M526 646c29-27 55-25 75-3 22-31 48-34 73-15-10-29-39-49-75-49-35 0-65 20-73 67z" fill="#BCEB73"/>
+      <path d="M531 693c30-15 51-6 69 15 25-21 44-25 68-14-14 27-43 45-77 45-26 0-47-13-60-46z" fill="#EAF7CF"/>
+      <path d="M511 593c10-42 48-72 94-72 44 0 82 28 94 68-50-24-133-22-188 4z" fill="#8E4B20" stroke="#552415" stroke-width="14" stroke-linejoin="round"/>
+      <path d="M528 564c40-24 108-24 151 0" fill="none" stroke="#C86B2B" stroke-width="16" stroke-linecap="round"/>
+      <path d="M603 521c-2-31 9-53 33-68" fill="none" stroke="#552415" stroke-width="17" stroke-linecap="round"/>
+      <path d="M635 478c40-40 82-36 113 5-43 22-82 22-113-5z" fill="#69C84B" stroke="#07524D" stroke-width="12"/>
+      <path d="M650 480l70 2" fill="none" stroke="#07524D" stroke-width="8" stroke-linecap="round"/>
+      <path d="M503 679c-44 16-75 38-91 64m179-6c-49 33-92 46-132 39" fill="none" stroke="#FFD65A" stroke-width="14" stroke-linecap="round"/>
+      <path d="M668 675c58-6 101-23 129-52" fill="none" stroke="#FFD65A" stroke-width="14" stroke-linecap="round"/>
+    </g>
+
+    <g id="foreground-sparkles" fill="#FFD65A" stroke="#552415" stroke-width="6" stroke-linejoin="round">
+      <path d="M189 688l13 30 30 13-30 13-13 30-13-30-30-13 30-13z"/>
+      <path d="M949 740l10 24 24 10-24 10-10 24-10-24-24-10 24-10z"/>
+      <path d="M772 779l8 19 19 8-19 8-8 19-8-19-19-8 19-8z"/>
+    </g>
+  </g>
+
+  <g id="wordmark-layer" text-anchor="middle">
+    <text id="brand-name-shadow" x="600" y="1055" font-family="'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',sans-serif" font-size="168" font-weight="900" letter-spacing="12" fill="#F39A2C" stroke="#552415" stroke-width="36" stroke-linejoin="round">松鼠世界</text>
+    <text id="brand-name" x="600" y="1037" font-family="'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',sans-serif" font-size="168" font-weight="900" letter-spacing="12" fill="#FFF3CF" stroke="#FFFFFF" stroke-width="6" paint-order="stroke">松鼠世界</text>
+    <path id="wordmark-swoosh" d="M385 1102c137 38 287 38 430 0" fill="none" stroke="#19A78A" stroke-width="20" stroke-linecap="round"/>
+    <circle cx="347" cy="1088" r="12" fill="#FFD65A"/>
+    <circle cx="853" cy="1088" r="12" fill="#FFD65A"/>
+  </g>
+</svg>

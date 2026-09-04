@@ -29,3 +29,14 @@ def test_final_logo_svg_is_editable_and_named_for_the_project() -> None:
 def test_final_logo_png_exports_match_the_vector_canvas() -> None:
     assert png_dimensions(LOGO_ROOT / "squirrel-world-logo-v2.png") == (1174, 1340)
     assert png_dimensions(LOGO_ROOT / "squirrel-world-logo-v2-512.png") == (512, 584)
+
+
+def test_original_logo_alternative_remains_editable_and_exportable() -> None:
+    root = ET.parse(LOGO_ROOT / "squirrel-world-logo.svg").getroot()
+    text_layers = root.findall(f".//{SVG_NAMESPACE}text")
+
+    assert root.attrib["viewBox"] == "0 0 1200 1200"
+    assert root.find(f".//{SVG_NAMESPACE}image") is None
+    assert any(layer.text == "松鼠世界" for layer in text_layers)
+    assert png_dimensions(LOGO_ROOT / "squirrel-world-logo.png") == (1200, 1200)
+    assert png_dimensions(LOGO_ROOT / "squirrel-world-logo-512.png") == (512, 512)
