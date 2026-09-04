@@ -17,6 +17,8 @@ from app.services import platform_session_service
 @pytest.fixture(autouse=True)
 def _isolate_external_env_file(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_BUSINESS_ENV_FILE", str(tmp_path / "missing-agent-business.env"))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
 def _one_page_pdf(text: str = "template pdf") -> bytes:
@@ -64,6 +66,51 @@ def _create_demo_application(client: TestClient) -> int:
     job_id = jobs_response.json()[0]["id"]
     record = client.app.state.service.create_application(job_id, note="测试夹具：平台已确认投递")
     return record.id
+
+
+def _create_evidence_job_context(client: TestClient) -> tuple[int, int]:
+    resume_response = client.post(
+        "/api/resumes",
+        files={
+            "file": (
+                "resume.txt",
+                "技能: Python, FastAPI, Agent\n项目: 求职工作台，负责需求分析和后端接口。".encode("utf-8"),
+                "text/plain",
+            )
+        },
+    )
+    assert resume_response.status_code == 201
+    resume_id = resume_response.json()["id"]
+    search_response = client.post(
+        "/api/search-runs",
+        json={
+            "resume_id": resume_id,
+            "keywords": ["Python 实习"],
+            "city": "杭州",
+            "platforms": ["boss"],
+        },
+    )
+    assert search_response.status_code == 201
+    job_id = client.get("/api/jobs").json()[0]["id"]
+    return resume_id, job_id
+
+
+def _enable_external_writer_route(client: TestClient) -> None:
+    response = client.put(
+        "/api/model-routes/ApplicationWriterAgent",
+        json={
+            "provider": "openai-compatible",
+            "model": "deepseek-chat",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key_env_var": "AGENT_BUSINESS_TEST_API_KEY",
+            "enabled": True,
+            "estimation_only": False,
+            "timeout_ms": 45000,
+            "input_price_per_million": 1.0,
+            "output_price_per_million": 2.0,
+        },
+    )
+    assert response.status_code == 200
 
 
 def test_full_resume_to_application_flow(tmp_path, monkeypatch):
@@ -2510,6 +2557,353 @@ def test_tailored_resume_pdf_requires_docx_template(tmp_path):
 
     assert pdf_response.status_code == 409
     assert "重新上传 DOCX" in pdf_response.json()["detail"]
+
+
+def test_trusted_evidence_library_end_to_end_requires_claim_review(tmp_path):
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+    resume_id, job_id = _create_evidence_job_context(client)
+
+    source_response = client.post(
+        "/api/evidence-sources",
+        files={
+            "file": (
+                "project.md",
+                (
+                    "项目：求职 Agent 工作台\n负责需求拆解、FastAPI 接口和 React 看板。\n\n"
+                    "实习：启明产品工程师\n整理用户反馈并跟进功能验证。"
+                ).encode("utf-8"),
+                "text/markdown",
+            )
+        },
+    )
+    assert source_response.status_code == 201
+    source = source_response.json()
+    assert source["file_type"] == "md"
+    assert source["extraction_status"] == "success"
+
+    cards_response = client.post(f"/api/evidence-sources/{source['id']}/extract-cards")
+    assert cards_response.status_code == 201
+    cards = cards_response.json()
+    assert len(cards) == 2
+    card_id = cards[0]["id"]
+
+    confirm_response = client.patch(
+        f"/api/evidence-cards/{card_id}",
+        json={"status": "confirmed"},
+    )
+    assert confirm_response.status_code == 200
+    assert confirm_response.json()["quote_verified"] is True
+
+    recommendation_response = client.get(f"/api/jobs/{job_id}/evidence-recommendations")
+    assert recommendation_response.status_code == 200
+    assert recommendation_response.json()[0]["card"]["id"] == card_id
+
+    tailor_response = client.post(
+        f"/api/jobs/{job_id}/evidence-tailor",
+        json={"resume_id": resume_id, "evidence_card_ids": [card_id]},
+    )
+    assert tailor_response.status_code == 201
+    trusted = tailor_response.json()
+    assert trusted["generation_mode"] == "local_safe"
+    assert trusted["review"]["traceability_coverage"] == 1.0
+    assert trusted["claims"][0]["evidence_card_ids"] == [card_id]
+    tailored_resume_id = trusted["id"]
+    claim_id = trusted["claims"][0]["id"]
+
+    blocked_finalize = client.post(f"/api/trusted-tailors/{tailored_resume_id}/finalize")
+    assert blocked_finalize.status_code == 409
+    blocked_pdf = client.get(f"/api/tailored-resumes/{tailored_resume_id}/pdf")
+    assert blocked_pdf.status_code == 409
+    assert "待核验" in blocked_pdf.json()["detail"]
+
+    edited_response = client.patch(
+        f"/api/tailored-claims/{claim_id}",
+        json={"text": "负责需求拆解和 FastAPI 接口", "user_decision": "accepted"},
+    )
+    assert edited_response.status_code == 200
+    assert edited_response.json()["support_status"] == "needs_review"
+    assert edited_response.json()["user_decision"] == "pending"
+
+    accepted_response = client.patch(
+        f"/api/tailored-claims/{claim_id}",
+        json={
+            "evidence_card_ids": [card_id],
+            "user_decision": "accepted",
+            "confirm_support": True,
+        },
+    )
+    assert accepted_response.status_code == 200
+    assert accepted_response.json()["support_status"] == "supported"
+    assert accepted_response.json()["user_decision"] == "accepted"
+
+    final_response = client.post(f"/api/trusted-tailors/{tailored_resume_id}/finalize")
+    assert final_response.status_code == 200
+    assert final_response.json()["review"]["trusted_evidence_finalized"] is True
+    assert "负责需求拆解" in final_response.json()["resume_rewrite"]
+
+    impact = client.get(f"/api/evidence-sources/{source['id']}/delete-impact")
+    assert impact.status_code == 200
+    assert impact.json()["requires_cascade"] is True
+    assert client.delete(f"/api/evidence-sources/{source['id']}").status_code == 409
+    deleted = client.delete(f"/api/evidence-sources/{source['id']}?cascade=true")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert client.get(f"/api/trusted-tailors/{tailored_resume_id}").status_code == 404
+
+
+def test_evidence_generation_rejects_draft_rejected_and_unknown_cards(tmp_path):
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+    resume_id, job_id = _create_evidence_job_context(client)
+    source = client.post(
+        "/api/evidence-sources",
+        files={"file": ("notes.txt", "项目：Agent 工作台，使用 Python 和 FastAPI。".encode("utf-8"), "text/plain")},
+    ).json()
+    card = client.post(f"/api/evidence-sources/{source['id']}/extract-cards").json()[0]
+
+    draft_response = client.post(
+        f"/api/jobs/{job_id}/evidence-tailor",
+        json={"resume_id": resume_id, "evidence_card_ids": [card["id"]]},
+    )
+    assert draft_response.status_code == 400
+    assert "尚未确认" in draft_response.json()["detail"]
+
+    client.patch(f"/api/evidence-cards/{card['id']}", json={"status": "rejected"})
+    rejected_response = client.post(
+        f"/api/jobs/{job_id}/evidence-tailor",
+        json={"resume_id": resume_id, "evidence_card_ids": [card["id"]]},
+    )
+    assert rejected_response.status_code == 400
+
+    unknown_response = client.post(
+        f"/api/jobs/{job_id}/evidence-tailor",
+        json={"resume_id": resume_id, "evidence_card_ids": [999999]},
+    )
+    assert unknown_response.status_code == 404
+
+    manual = client.post(
+        "/api/evidence-cards",
+        json={
+            "category": "project",
+            "title": "用户手工补充项目",
+            "actions": ["完成需求分析和接口验收"],
+            "skills": ["Python"],
+        },
+    )
+    assert manual.status_code == 201
+    assert manual.json()["provenance_type"] == "user_statement"
+    manual_id = manual.json()["id"]
+    client.patch(f"/api/evidence-cards/{manual_id}", json={"status": "confirmed"})
+    generated = client.post(
+        f"/api/jobs/{job_id}/evidence-tailor",
+        json={"resume_id": resume_id, "evidence_card_ids": [manual_id]},
+    )
+    assert generated.status_code == 201
+    assert generated.json()["claims"][0]["evidence_card_ids"] == [manual_id]
+
+
+def test_document_evidence_quote_must_exist_before_confirmation(tmp_path):
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+    source = client.post(
+        "/api/evidence-sources",
+        files={"file": ("evidence.txt", "实习：整理用户反馈并跟进验证。".encode("utf-8"), "text/plain")},
+    ).json()
+    card = client.post(f"/api/evidence-sources/{source['id']}/extract-cards").json()[0]
+
+    invalid_quote = client.patch(
+        f"/api/evidence-cards/{card['id']}",
+        json={"source_quote": "原文中不存在的虚构成果", "status": "confirmed"},
+    )
+    assert invalid_quote.status_code == 400
+    assert "原文中找到" in invalid_quote.json()["detail"]
+
+
+def test_evidence_sources_cover_supported_document_formats_and_manual_fallback(tmp_path):
+    from docx import Document
+
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+
+    docx_buffer = BytesIO()
+    document = Document()
+    document.add_paragraph("项目：可信经历资料库")
+    document.save(docx_buffer)
+    fixtures = [
+        ("source.txt", "项目：文本资料".encode("utf-8"), "text/plain", "txt"),
+        ("source.md", "项目：Markdown资料".encode("utf-8"), "text/markdown", "md"),
+        (
+            "source.docx",
+            docx_buffer.getvalue(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "docx",
+        ),
+        ("source.pdf", _one_page_pdf("Project: evidence library"), "application/pdf", "pdf"),
+    ]
+    for filename, content, content_type, expected_type in fixtures:
+        response = client.post(
+            "/api/evidence-sources",
+            files={"file": (filename, content, content_type)},
+        )
+        assert response.status_code == 201
+        assert response.json()["file_type"] == expected_type
+        assert response.json()["manual_text_required"] is False
+
+    scanned = client.post(
+        "/api/evidence-sources",
+        files={"file": ("scan.pdf", _one_page_pdf(" "), "application/pdf")},
+    )
+    assert scanned.status_code == 201
+    assert scanned.json()["manual_text_required"] is True
+    blocked = client.post(f"/api/evidence-sources/{scanned.json()['id']}/extract-cards")
+    assert blocked.status_code == 409
+    manual = client.patch(
+        f"/api/evidence-sources/{scanned.json()['id']}/manual-text",
+        json={"raw_text": "项目：扫描件手工补全文本"},
+    )
+    assert manual.status_code == 200
+    assert manual.json()["extraction_method"] == "manual_text"
+
+
+def test_external_evidence_card_extraction_rejects_unlocatable_quote(tmp_path, monkeypatch):
+    class FakeResult:
+        provider = "openai-compatible"
+        model = "deepseek-chat"
+        prompt_tokens = 80
+        completion_tokens = 40
+        duration_ms = 25
+        estimated = False
+
+        def __init__(self, content):
+            self.content = content
+
+    monkeypatch.setenv("AGENT_BUSINESS_TEST_API_KEY", "test-secret")
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+    _enable_external_writer_route(client)
+    source = client.post(
+        "/api/evidence-sources",
+        files={"file": ("project.txt", "项目：可信经历库，负责需求分析。".encode("utf-8"), "text/plain")},
+    ).json()
+
+    app.state.evidence_service.llm_client.generate_evidence_cards = lambda config, source: FakeResult(
+        json.dumps(
+            {
+                "cards": [
+                    {
+                        "category": "project",
+                        "title": "可信经历库",
+                        "organization": "",
+                        "time_range": "",
+                        "situation": "负责需求分析",
+                        "actions": ["完成需求分析"],
+                        "results": [],
+                        "skills": [],
+                        "source_quote": "原文不存在的引用",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+    )
+    invalid = client.post(f"/api/evidence-sources/{source['id']}/extract-cards")
+    assert invalid.status_code == 502
+    assert "无法在资料原文" in invalid.json()["detail"]
+    assert client.get(f"/api/evidence-cards?source_id={source['id']}").json() == []
+
+    app.state.evidence_service.llm_client.generate_evidence_cards = lambda config, source: FakeResult(
+        json.dumps(
+            {
+                "cards": [
+                    {
+                        "category": "project",
+                        "title": "可信经历库",
+                        "organization": "",
+                        "time_range": "",
+                        "situation": "负责需求分析",
+                        "actions": ["负责需求分析"],
+                        "results": [],
+                        "skills": [],
+                        "source_quote": "项目：可信经历库，负责需求分析。",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+    )
+    valid = client.post(f"/api/evidence-sources/{source['id']}/extract-cards")
+    assert valid.status_code == 201
+    assert valid.json()[0]["quote_verified"] is True
+    assert "已配置模型" in valid.json()[0]["user_note"]
+
+
+def test_external_trusted_tailor_rejects_unknown_card_id_without_fallback(tmp_path, monkeypatch):
+    class FakeResult:
+        provider = "openai-compatible"
+        model = "deepseek-chat"
+        prompt_tokens = 100
+        completion_tokens = 55
+        duration_ms = 30
+        estimated = False
+
+        def __init__(self, content):
+            self.content = content
+
+    monkeypatch.setenv("AGENT_BUSINESS_TEST_API_KEY", "test-secret")
+    app = create_app(db_path=tmp_path / "agent-business.sqlite3")
+    client = TestClient(app)
+    _enable_external_writer_route(client)
+    resume_id, job_id = _create_evidence_job_context(client)
+    manual = client.post(
+        "/api/evidence-cards",
+        json={
+            "category": "project",
+            "title": "可信经历资料库",
+            "actions": ["负责需求分析和 API 验收"],
+            "skills": ["Python"],
+        },
+    ).json()
+    client.patch(f"/api/evidence-cards/{manual['id']}", json={"status": "confirmed"})
+
+    app.state.evidence_service.llm_client.generate_evidence_tailor = lambda config, job, cards: FakeResult(
+        json.dumps(
+            {
+                "claims": [{"text": "虚假引用", "evidence_card_ids": [999999]}],
+                "greeting_message": "您好",
+            },
+            ensure_ascii=False,
+        )
+    )
+    invalid = client.post(
+        f"/api/jobs/{job_id}/evidence-tailor",
+        json={"resume_id": resume_id, "evidence_card_ids": [manual["id"]]},
+    )
+    assert invalid.status_code == 502
+    assert "未选择、未确认或不存在" in invalid.json()["detail"]
+
+    app.state.evidence_service.llm_client.generate_evidence_tailor = lambda config, job, cards: FakeResult(
+        json.dumps(
+            {
+                "claims": [
+                    {
+                        "text": "负责可信经历资料库的需求分析和 API 验收",
+                        "evidence_card_ids": [manual["id"]],
+                    }
+                ],
+                "greeting_message": "您好，我希望应聘该岗位。",
+            },
+            ensure_ascii=False,
+        )
+    )
+    valid = client.post(
+        f"/api/jobs/{job_id}/evidence-tailor",
+        json={"resume_id": resume_id, "evidence_card_ids": [manual["id"]]},
+    )
+    assert valid.status_code == 201
+    assert valid.json()["generation_mode"] == "external_ai"
+    assert valid.json()["truth_check_passed"] is False
+    assert valid.json()["claims"][0]["evidence_card_ids"] == [manual["id"]]
 
 
 def test_tailor_routes_application_writer_through_model_router(tmp_path, monkeypatch):

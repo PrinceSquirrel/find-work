@@ -16,6 +16,10 @@ from app.schemas import (
     ApplyRecordRequest,
     BrowserJobExtractRequest,
     BrowserJobSearchRequest,
+    EvidenceCardCreate,
+    EvidenceCardUpdate,
+    EvidenceSourceManualTextRequest,
+    EvidenceTailorRequest,
     McpToolCallRequest,
     McpToolDescriptor,
     McpServerConfig,
@@ -29,11 +33,13 @@ from app.schemas import (
     SkillRunRequest,
     StatusPatchRequest,
     SystemHealthResponse,
+    TailoredClaimUpdate,
     TailorRequest,
 )
 from app.services import JobApplicationService
 from app.services.application_sync_service import ApplicationSyncService
 from app.services.browser_job_extractor_service import BrowserJobExtractorService
+from app.services.evidence_service import EvidenceConflictError, EvidenceModelError, EvidenceService
 from app.services.job_application_service import LowQualityJobDetailError, PlatformApplicationNotConfirmedError
 from app.services.llm_client_service import LLMClientUnavailable, OpenAICompatibleClient
 from app.services.pdf_service import TailoredResumePdfService
@@ -98,8 +104,10 @@ SKILL_REGISTRY = [
 def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     store = SQLiteStore(db_path)
     service = JobApplicationService(store)
+    evidence_service = EvidenceService(store)
     app = FastAPI(title="agent-business", version="0.1.0")
     app.state.service = service
+    app.state.evidence_service = evidence_service
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -237,6 +245,144 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/evidence-sources", status_code=201)
+    async def upload_evidence_source(file: Annotated[UploadFile, File()]):
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="资料文件不能为空")
+        try:
+            return app.state.evidence_service.upload_source(file.filename or "source.txt", content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/evidence-sources")
+    def list_evidence_sources():
+        return app.state.service.store.list_evidence_sources()
+
+    @app.patch("/api/evidence-sources/{source_id}/manual-text")
+    def update_evidence_source_manual_text(source_id: int, payload: EvidenceSourceManualTextRequest):
+        try:
+            return app.state.evidence_service.update_source_manual_text(source_id, payload.raw_text)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EvidenceConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/evidence-sources/{source_id}/delete-impact")
+    def evidence_source_delete_impact(source_id: int):
+        try:
+            return app.state.service.store.evidence_source_delete_impact(source_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/evidence-sources/{source_id}")
+    def delete_evidence_source(source_id: int, cascade: bool = False):
+        try:
+            impact = app.state.service.store.evidence_source_delete_impact(source_id)
+            if impact["requires_cascade"] and not cascade:
+                raise EvidenceConflictError("该资料已被可信简历引用，请确认级联删除受影响的生成结果")
+            return app.state.service.store.delete_evidence_source(source_id, cascade=cascade)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EvidenceConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/evidence-sources/{source_id}/extract-cards", status_code=201)
+    def extract_evidence_cards(source_id: int):
+        try:
+            return app.state.evidence_service.extract_cards(source_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EvidenceConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except EvidenceModelError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/evidence-cards")
+    def list_evidence_cards(source_id: int | None = None, status: str | None = None):
+        return app.state.service.store.list_evidence_cards(source_id=source_id, status=status)
+
+    @app.post("/api/evidence-cards", status_code=201)
+    def create_manual_evidence_card(payload: EvidenceCardCreate):
+        try:
+            return app.state.evidence_service.create_manual_card(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/evidence-cards/{card_id}")
+    def update_evidence_card(card_id: int, payload: EvidenceCardUpdate):
+        try:
+            return app.state.evidence_service.update_card(card_id, payload)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/evidence-cards/{card_id}", status_code=204)
+    def delete_evidence_card(card_id: int):
+        try:
+            app.state.evidence_service.delete_card(card_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return Response(status_code=204)
+
+    @app.get("/api/jobs/{job_id}/evidence-recommendations")
+    def evidence_recommendations(job_id: int):
+        try:
+            return app.state.evidence_service.recommend_cards(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EvidenceConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/jobs/{job_id}/evidence-tailor", status_code=201)
+    def generate_evidence_tailor(job_id: int, payload: EvidenceTailorRequest):
+        try:
+            return app.state.evidence_service.generate_trusted_tailor(
+                job_id=job_id,
+                resume_id=payload.resume_id,
+                evidence_card_ids=payload.evidence_card_ids,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EvidenceConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except EvidenceModelError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/trusted-tailors/{tailored_resume_id}")
+    def get_trusted_tailor(tailored_resume_id: int):
+        try:
+            return app.state.evidence_service.get_trusted_tailor(tailored_resume_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/api/tailored-claims/{claim_id}")
+    def update_tailored_claim(claim_id: int, payload: TailoredClaimUpdate):
+        try:
+            return app.state.evidence_service.update_claim(claim_id, payload)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/trusted-tailors/{tailored_resume_id}/finalize")
+    def finalize_trusted_tailor(tailored_resume_id: int):
+        try:
+            return app.state.evidence_service.finalize(tailored_resume_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EvidenceConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.post("/api/search-runs", status_code=201)
     def create_search_run(payload: SearchRunRequest):
         try:
@@ -290,6 +436,8 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     @app.get("/api/tailored-resumes/{tailored_resume_id}/pdf")
     def download_tailored_resume_pdf(tailored_resume_id: int):
         try:
+            if not app.state.service.store.can_export_tailored_resume(tailored_resume_id):
+                raise ValueError("仍有可信简历内容待核验或待接受，不能导出 PDF")
             tailored_bundle = app.state.service.store.get_tailor_bundle(tailored_resume_id)
             template_bytes = app.state.service.store.get_resume_template_bytes(int(tailored_bundle["resume_id"]))
         except KeyError as exc:
