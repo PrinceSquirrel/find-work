@@ -28,6 +28,13 @@ import {
   summarizeUsage
 } from "./lib/dashboard";
 import type { SystemHealthOperationFeedback } from "./lib/dashboard";
+import {
+  filterHomeFeatures,
+  getWorkspaceModule,
+  WORKSPACE_NAV_ITEMS,
+  WORKSPACE_PANEL_TITLES,
+} from "./lib/workspace";
+import type { WorkspaceModule } from "./lib/workspace";
 import type {
   AgentModelRoute,
   AnalyticsBucket,
@@ -36,6 +43,10 @@ import type {
   ApplicationSyncDiagnostic,
   ApplicationSyncProposal,
   ApplicationStatus,
+  EvidenceCard,
+  EvidenceCardCreate,
+  EvidenceRecommendation,
+  EvidenceSource,
   JobFilters,
   JobPosting,
   LLMUsageSummary,
@@ -50,7 +61,8 @@ import type {
   ResumeDraft,
   SearchRun,
   SystemHealthResponse,
-  TailorBundle
+  TailorBundle,
+  TrustedTailorBundle
 } from "./types";
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -75,6 +87,16 @@ const RECOMMENDATION_LABELS: Record<string, string> = {
   strong_apply: "强推荐",
   review: "人工复核",
   skip: "暂缓"
+};
+
+const EVIDENCE_CATEGORY_LABELS: Record<string, string> = {
+  internship: "实习",
+  project: "项目",
+  education: "教育",
+  competition: "竞赛",
+  skill: "技能",
+  achievement: "成果",
+  other: "其他"
 };
 
 const STATUS_COLUMNS: ApplicationStatus[] = [
@@ -126,6 +148,16 @@ const MODEL_ROUTE_AGENT_LABELS: Record<string, string> = {
   ReviewAgent: "事实风险审核"
 };
 
+const WORKSPACE_MODULE_ICONS: Record<WorkspaceModule, string> = {
+  dashboard: "▦",
+  materials: "▤",
+  jobs: "⌕",
+  studio: "✦",
+  applications: "➤",
+  agents: "◎",
+  settings: "⚙",
+};
+
 type BusyState = {
   boot: boolean;
   upload: boolean;
@@ -146,6 +178,13 @@ type BusyState = {
   modelKeyDelete: boolean;
   modelRouteAgent: string | null;
   modelProfileAction: "save" | "apply" | "delete" | null;
+  evidenceUpload: boolean;
+  evidenceSourceId: number | null;
+  evidenceCardId: number | null;
+  evidenceRecommend: boolean;
+  trustedTailorJobId: number | null;
+  trustedClaimId: number | null;
+  trustedFinalizeId: number | null;
 };
 
 const initialBusy: BusyState = {
@@ -167,7 +206,38 @@ const initialBusy: BusyState = {
   modelTest: false,
   modelKeyDelete: false,
   modelRouteAgent: null,
-  modelProfileAction: null
+  modelProfileAction: null,
+  evidenceUpload: false,
+  evidenceSourceId: null,
+  evidenceCardId: null,
+  evidenceRecommend: false,
+  trustedTailorJobId: null,
+  trustedClaimId: null,
+  trustedFinalizeId: null
+};
+
+type EvidenceCardDraft = {
+  title: string;
+  category: string;
+  organization: string;
+  time_range: string;
+  situation: string;
+  actions: string;
+  results: string;
+  skills: string;
+  user_note: string;
+};
+
+const emptyEvidenceCardDraft: EvidenceCardDraft = {
+  title: "",
+  category: "project",
+  organization: "",
+  time_range: "",
+  situation: "",
+  actions: "",
+  results: "",
+  skills: "",
+  user_note: ""
 };
 
 type SearchMode = "demo" | "browser_cdp";
@@ -206,7 +276,30 @@ function withModelApiKey(draft: ModelConfigUpdate, apiKey: string): ModelConfigU
   };
 }
 
+function evidenceCardToDraft(card: EvidenceCard): EvidenceCardDraft {
+  return {
+    title: card.title,
+    category: card.category,
+    organization: card.organization,
+    time_range: card.time_range,
+    situation: card.situation,
+    actions: card.actions.join("\n"),
+    results: card.results.join("\n"),
+    skills: card.skills.join("、"),
+    user_note: card.user_note
+  };
+}
+
+function splitEvidenceDraftList(value: string): string[] {
+  return value
+    .split(/[\n,，、]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function App() {
+  const [activeModule, setActiveModule] = useState<WorkspaceModule>("dashboard");
+  const [featureQuery, setFeatureQuery] = useState("");
   const [resume, setResume] = useState<ResumeDraft | null>(null);
   const [jobs, setJobs] = useState<JobPosting[]>([]);
   const [applications, setApplications] = useState<ApplicationRecord[]>([]);
@@ -235,6 +328,17 @@ function App() {
   const [tailoredRevisionDrafts, setTailoredRevisionDrafts] = useState<Record<number, string>>({});
   const [tailoredRevisionMessages, setTailoredRevisionMessages] = useState<Record<number, string>>({});
   const [tailorBlockedMessages, setTailorBlockedMessages] = useState<Record<number, string>>({});
+  const [evidenceSources, setEvidenceSources] = useState<EvidenceSource[]>([]);
+  const [evidenceCards, setEvidenceCards] = useState<EvidenceCard[]>([]);
+  const [evidenceFiles, setEvidenceFiles] = useState<File[]>([]);
+  const [evidenceSourceTexts, setEvidenceSourceTexts] = useState<Record<number, string>>({});
+  const [evidenceCardDrafts, setEvidenceCardDrafts] = useState<Record<number, EvidenceCardDraft>>({});
+  const [manualEvidenceDraft, setManualEvidenceDraft] = useState<EvidenceCardDraft>(emptyEvidenceCardDraft);
+  const [evidenceRecommendations, setEvidenceRecommendations] = useState<EvidenceRecommendation[]>([]);
+  const [selectedEvidenceCardIds, setSelectedEvidenceCardIds] = useState<number[]>([]);
+  const [trustedTailor, setTrustedTailor] = useState<TrustedTailorBundle | null>(null);
+  const [trustedClaimDrafts, setTrustedClaimDrafts] = useState<Record<number, string>>({});
+  const [evidenceMessage, setEvidenceMessage] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [detailJobId, setDetailJobId] = useState<number | null>(null);
   const [lastRun, setLastRun] = useState<SearchRun | null>(null);
@@ -280,6 +384,14 @@ function App() {
   }, []);
 
   const rankedJobs = useMemo(() => rankJobs(jobs, filters), [filters, jobs]);
+  const confirmedEvidenceCards = useMemo(
+    () => evidenceCards.filter((card) => card.status === "confirmed"),
+    [evidenceCards]
+  );
+  const evidenceCardsById = useMemo(
+    () => new Map(evidenceCards.map((card) => [card.id, card])),
+    [evidenceCards]
+  );
   const selectedJob = useMemo(
     () => jobs.find((job) => job.id === selectedJobId) ?? rankedJobs[0] ?? null,
     [jobs, rankedJobs, selectedJobId]
@@ -316,6 +428,21 @@ function App() {
   }, [applications]);
   const usageCards = useMemo(() => summarizeUsage(usage), [usage]);
   const totalApplications = analytics?.totals.applications ?? applications.length;
+  const activeModuleMeta = useMemo(() => getWorkspaceModule(activeModule), [activeModule]);
+  const visibleHomeFeatures = useMemo(() => filterHomeFeatures(featureQuery), [featureQuery]);
+  const workspaceCounts = useMemo<Partial<Record<WorkspaceModule, number>>>(
+    () => ({
+      materials: evidenceCards.length + (resume ? 1 : 0),
+      jobs: jobs.length,
+      studio: Object.keys(tailorBundles).length,
+      applications: totalApplications,
+      agents: agentEvents?.events.length ?? 0,
+    }),
+    [agentEvents?.events.length, evidenceCards.length, jobs.length, resume, tailorBundles, totalApplications],
+  );
+  useEffect(() => {
+    document.title = `${activeModuleMeta.label} · 松鼠世界`;
+  }, [activeModuleMeta.label]);
   const importableExtractionCount = useMemo(
     () =>
       platformExtractions.reduce(
@@ -392,7 +519,9 @@ function App() {
         nextModelConfig,
         nextModelRoutes,
         nextModelProfiles,
-        nextSystemHealth
+        nextSystemHealth,
+        nextEvidenceSources,
+        nextEvidenceCards
       ] = await Promise.all([
         api.getLatestResume(),
         api.listJobs(),
@@ -404,7 +533,9 @@ function App() {
         api.getModelConfig(),
         api.getModelRoutes(),
         api.getModelProfiles(),
-        api.getSystemHealth()
+        api.getSystemHealth(),
+        api.listEvidenceSources(),
+        api.listEvidenceCards()
       ]);
       const visibleJobs = filterJobsForActiveSearchRun(nextJobs, lastRun?.id ?? null);
       setResume(nextResume);
@@ -430,6 +561,14 @@ function App() {
       setModelRoutes(nextModelRoutes.routes);
       setModelProfiles(nextModelProfiles.profiles);
       setSystemHealth(nextSystemHealth);
+      setEvidenceSources(nextEvidenceSources);
+      setEvidenceCards(nextEvidenceCards);
+      setEvidenceSourceTexts(
+        Object.fromEntries(nextEvidenceSources.map((source) => [source.id, source.raw_text]))
+      );
+      setEvidenceCardDrafts(
+        Object.fromEntries(nextEvidenceCards.map((card) => [card.id, evidenceCardToDraft(card)]))
+      );
       setRecentSystemHealthError(null);
       setModelRouteDrafts(Object.fromEntries(nextModelRoutes.routes.map((route) => [route.agent_name, toModelConfigUpdate(route)])));
       setModelRouteProfileSelections((current) => {
@@ -1260,6 +1399,275 @@ function App() {
     }
   }
 
+  async function refreshEvidenceLibrary() {
+    const [nextSources, nextCards] = await Promise.all([
+      api.listEvidenceSources(),
+      api.listEvidenceCards()
+    ]);
+    setEvidenceSources(nextSources);
+    setEvidenceCards(nextCards);
+    setEvidenceSourceTexts(Object.fromEntries(nextSources.map((source) => [source.id, source.raw_text])));
+    setEvidenceCardDrafts(Object.fromEntries(nextCards.map((card) => [card.id, evidenceCardToDraft(card)])));
+  }
+
+  async function handleEvidenceUpload(event: FormEvent) {
+    event.preventDefault();
+    if (!evidenceFiles.length) {
+      setError("请先选择至少一个个人资料文件。");
+      return;
+    }
+    setBusy((current) => ({ ...current, evidenceUpload: true }));
+    setError(null);
+    setEvidenceMessage(null);
+    try {
+      for (const file of evidenceFiles) {
+        await api.uploadEvidenceSource(file);
+      }
+      await refreshEvidenceLibrary();
+      setEvidenceFiles([]);
+      setEvidenceMessage(`已上传 ${evidenceFiles.length} 份资料。请先检查解析结果，再提取候选卡片。`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, evidenceUpload: false }));
+    }
+  }
+
+  async function handleEvidenceSourceManualText(source: EvidenceSource) {
+    const rawText = (evidenceSourceTexts[source.id] ?? "").trim();
+    if (!rawText) {
+      setError("请先粘贴资料正文。");
+      return;
+    }
+    setBusy((current) => ({ ...current, evidenceSourceId: source.id }));
+    setError(null);
+    try {
+      await api.updateEvidenceSourceManualText(source.id, rawText);
+      await refreshEvidenceLibrary();
+      setEvidenceMessage(`《${source.filename}》的手工文本已保存。`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, evidenceSourceId: null }));
+    }
+  }
+
+  async function handleExtractEvidenceCards(source: EvidenceSource) {
+    setBusy((current) => ({ ...current, evidenceSourceId: source.id }));
+    setError(null);
+    try {
+      const cards = await api.extractEvidenceCards(source.id);
+      await refreshEvidenceLibrary();
+      setEvidenceMessage(`《${source.filename}》已得到 ${cards.length} 张候选卡片，确认前不会参与生成。`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, evidenceSourceId: null }));
+    }
+  }
+
+  async function handleDeleteEvidenceSource(source: EvidenceSource) {
+    setBusy((current) => ({ ...current, evidenceSourceId: source.id }));
+    setError(null);
+    try {
+      const impact = await api.getEvidenceSourceDeleteImpact(source.id);
+      let cascade = false;
+      if (impact.requires_cascade) {
+        cascade = window.confirm(
+          `删除《${source.filename}》会同时删除 ${impact.card_count} 张卡片和 ${impact.tailored_resume_count} 份可信简历。是否继续？`
+        );
+        if (!cascade) return;
+      }
+      await api.deleteEvidenceSource(source.id, cascade);
+      if (trustedTailor && impact.tailored_resume_count) setTrustedTailor(null);
+      await refreshEvidenceLibrary();
+      setEvidenceMessage(`《${source.filename}》及其本地证据已删除。`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, evidenceSourceId: null }));
+    }
+  }
+
+  async function handleCreateManualEvidenceCard(event: FormEvent) {
+    event.preventDefault();
+    const payload: EvidenceCardCreate = {
+      category: manualEvidenceDraft.category,
+      title: manualEvidenceDraft.title.trim(),
+      organization: manualEvidenceDraft.organization.trim(),
+      time_range: manualEvidenceDraft.time_range.trim(),
+      situation: manualEvidenceDraft.situation.trim(),
+      actions: splitEvidenceDraftList(manualEvidenceDraft.actions),
+      results: splitEvidenceDraftList(manualEvidenceDraft.results),
+      skills: splitEvidenceDraftList(manualEvidenceDraft.skills),
+      user_note: manualEvidenceDraft.user_note.trim()
+    };
+    if (!payload.title) {
+      setError("手工经历卡片需要标题。");
+      return;
+    }
+    setBusy((current) => ({ ...current, evidenceCardId: -1 }));
+    setError(null);
+    try {
+      await api.createEvidenceCard(payload);
+      await refreshEvidenceLibrary();
+      setManualEvidenceDraft(emptyEvidenceCardDraft);
+      setEvidenceMessage("已新增一张“用户自述”卡片，确认后才能参与生成。 ");
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, evidenceCardId: null }));
+    }
+  }
+
+  async function handleSaveEvidenceCard(card: EvidenceCard, status = card.status) {
+    const draft = evidenceCardDrafts[card.id] ?? evidenceCardToDraft(card);
+    setBusy((current) => ({ ...current, evidenceCardId: card.id }));
+    setError(null);
+    try {
+      await api.updateEvidenceCard(card.id, {
+        title: draft.title,
+        category: draft.category,
+        organization: draft.organization,
+        time_range: draft.time_range,
+        situation: draft.situation,
+        actions: splitEvidenceDraftList(draft.actions),
+        results: splitEvidenceDraftList(draft.results),
+        skills: splitEvidenceDraftList(draft.skills),
+        user_note: draft.user_note,
+        status
+      });
+      await refreshEvidenceLibrary();
+      setEvidenceMessage(status === "confirmed" ? "经历卡片已确认，可以参与可信生成。" : "经历卡片已保存。 ");
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, evidenceCardId: null }));
+    }
+  }
+
+  async function handleDeleteEvidenceCard(card: EvidenceCard) {
+    setBusy((current) => ({ ...current, evidenceCardId: card.id }));
+    setError(null);
+    try {
+      await api.deleteEvidenceCard(card.id);
+      setSelectedEvidenceCardIds((current) => current.filter((id) => id !== card.id));
+      await refreshEvidenceLibrary();
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, evidenceCardId: null }));
+    }
+  }
+
+  async function handleRecommendEvidence() {
+    if (!selectedJob) {
+      setError("请先在岗位池中选择一个岗位。");
+      return;
+    }
+    setBusy((current) => ({ ...current, evidenceRecommend: true }));
+    setError(null);
+    try {
+      const recommendations = await api.getEvidenceRecommendations(selectedJob.id);
+      setEvidenceRecommendations(recommendations);
+      setSelectedEvidenceCardIds(recommendations.filter((item) => item.score >= 40).map((item) => item.card.id));
+      setEvidenceMessage(`已根据「${selectedJob.title}」推荐 ${recommendations.length} 张已确认经历卡片。`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, evidenceRecommend: false }));
+    }
+  }
+
+  function toggleEvidenceCard(cardId: number) {
+    setSelectedEvidenceCardIds((current) =>
+      current.includes(cardId) ? current.filter((id) => id !== cardId) : [...current, cardId]
+    );
+  }
+
+  function updateEvidenceCardDraft(card: EvidenceCard, field: keyof EvidenceCardDraft, value: string) {
+    setEvidenceCardDrafts((current) => ({
+      ...current,
+      [card.id]: { ...(current[card.id] ?? evidenceCardToDraft(card)), [field]: value }
+    }));
+  }
+
+  async function handleGenerateTrustedTailor() {
+    if (!selectedJob || !resume?.id) {
+      setError("请先上传简历并选择岗位。");
+      return;
+    }
+    if (!selectedEvidenceCardIds.length) {
+      setError("请至少选择一张已确认经历卡片。");
+      return;
+    }
+    setBusy((current) => ({ ...current, trustedTailorJobId: selectedJob.id }));
+    setError(null);
+    try {
+      const bundle = await api.generateTrustedTailor(selectedJob.id, resume.id, selectedEvidenceCardIds);
+      setTrustedTailor(bundle);
+      setTrustedClaimDrafts(Object.fromEntries(bundle.claims.map((claim) => [claim.id, claim.text])));
+      setEvidenceMessage(
+        bundle.generation_mode === "external_ai"
+          ? "模型已生成可追溯内容，请逐条核验后接受。"
+          : "当前使用本地安全模式生成，请逐条核验后接受。"
+      );
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, trustedTailorJobId: null }));
+    }
+  }
+
+  async function handleTrustedClaim(claimId: number, action: "save" | "accept" | "reject") {
+    if (!trustedTailor) return;
+    const claim = trustedTailor.claims.find((item) => item.id === claimId);
+    if (!claim) return;
+    const text = trustedClaimDrafts[claim.id] ?? claim.text;
+    setBusy((current) => ({ ...current, trustedClaimId: claim.id }));
+    setError(null);
+    try {
+      await api.updateTailoredClaim(
+        claim.id,
+        action === "reject"
+          ? { user_decision: "rejected" }
+          : action === "accept"
+            ? {
+                text,
+                evidence_card_ids: claim.evidence_card_ids,
+                user_decision: "accepted",
+                confirm_support: true
+              }
+            : { text }
+      );
+      const refreshed = await api.getTrustedTailor(trustedTailor.id);
+      setTrustedTailor(refreshed);
+      setTrustedClaimDrafts((current) => ({
+        ...current,
+        ...Object.fromEntries(refreshed.claims.map((item) => [item.id, current[item.id] ?? item.text]))
+      }));
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, trustedClaimId: null }));
+    }
+  }
+
+  async function handleFinalizeTrustedTailor() {
+    if (!trustedTailor) return;
+    setBusy((current) => ({ ...current, trustedFinalizeId: trustedTailor.id }));
+    setError(null);
+    try {
+      const finalized = await api.finalizeTrustedTailor(trustedTailor.id);
+      setTrustedTailor(finalized);
+      setEvidenceMessage("可信简历已定稿；所有保留内容均通过证据核验，可以导出。 ");
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setBusy((current) => ({ ...current, trustedFinalizeId: null }));
+    }
+  }
+
   async function handleStatusUpdate(application: ApplicationRecord) {
     const nextStatus = statusDrafts[application.id];
     if (!nextStatus || nextStatus === application.current_status) {
@@ -1327,19 +1735,123 @@ function App() {
     }
   }
 
+  function activateWorkspaceModule(moduleId: WorkspaceModule, trigger?: HTMLButtonElement) {
+    setActiveModule(moduleId);
+    trigger?.blur();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   return (
-    <main className="app-shell">
-      <section className="control-strip">
-        <div>
-          <p className="eyebrow">agent-business / local operator console</p>
-          <h1>求职投递多 Agent 工作台</h1>
+    <div className="squirrel-app" data-active-module={activeModule}>
+      <aside className="squirrel-sidebar" aria-label="主导航">
+        <div className="squirrel-brand">
+          <img src="/squirrel-world-emblem.svg" alt="松鼠世界 Logo" />
+          <div>
+            <strong>松鼠世界</strong>
+            <span>Agent Workspace</span>
+          </div>
         </div>
-        <div className="strip-metrics" aria-label="工作台概览">
-          <Metric label="岗位池" value={jobs.length.toString()} detail={searchMode === "demo" ? "demo 搜索结果" : "浏览器模式"} />
-          <Metric label="投递记录" value={totalApplications.toString()} detail="人审后入库" />
-          <Metric label="Token" value={usageCards.totalTokens} detail={usageCards.totalCost} />
+        <span className="sidebar-section-label">工作空间</span>
+        <nav className="workspace-nav">
+          {WORKSPACE_NAV_ITEMS.map((item) => {
+            const count = workspaceCounts[item.id];
+            return (
+              <button
+                className={`workspace-nav-button ${activeModule === item.id ? "active" : ""}`}
+                type="button"
+                aria-current={activeModule === item.id ? "page" : undefined}
+                aria-label={item.label}
+                title={item.description}
+                key={item.id}
+                onClick={(event) => activateWorkspaceModule(item.id, event.currentTarget)}
+              >
+                <span className="workspace-nav-icon" aria-hidden="true">{WORKSPACE_MODULE_ICONS[item.id]}</span>
+                <span className="workspace-nav-copy">
+                  <b>{item.label}</b>
+                  <small>{item.description}</small>
+                </span>
+                {count ? <i>{count > 99 ? "99+" : count}</i> : null}
+              </button>
+            );
+          })}
+        </nav>
+        <div className="sidebar-account">
+          <div className="sidebar-utilities" aria-label="工作台工具">
+            <button type="button" aria-label="切换显示主题" title="主题">☾</button>
+            <button type="button" aria-label="查看通知" title="通知">♢</button>
+          </div>
+          <div className="sidebar-profile">
+            <span>松</span>
+            <div><b>本地用户</b><small>单用户工作空间</small></div>
+          </div>
+          <p><i />本地服务运行中</p>
         </div>
-      </section>
+      </aside>
+
+      <main className="app-shell" data-visible-panels={WORKSPACE_PANEL_TITLES[activeModule].join(",")}>
+        {activeModule === "dashboard" ? (
+          <>
+            <section className="dashboard-hero" aria-labelledby="dashboard-title">
+              <div>
+                <p className="eyebrow">Squirrel World · Local Career Agent</p>
+                <h1 id="dashboard-title">把每一次求职行动，装进清晰的小世界</h1>
+                <p>从可信资料到真实岗位、定制生成和投递回读，所有关键动作都在本地工作台完成。</p>
+              </div>
+              <img src="/squirrel-world-emblem.svg" alt="" aria-hidden="true" />
+              <label className="feature-search">
+                <span aria-hidden="true">⌕</span>
+                <input
+                  type="search"
+                  value={featureQuery}
+                  onChange={(event) => setFeatureQuery(event.target.value)}
+                  placeholder="搜索功能，例如：岗位、简历、投递或模型设置"
+                  aria-label="搜索松鼠世界功能"
+                />
+                <kbd>/</kbd>
+              </label>
+            </section>
+
+            <section className="home-feature-intro" aria-labelledby="feature-intro-title">
+              <header>
+                <div>
+                  <p className="eyebrow">Product Guide</p>
+                  <h2 id="feature-intro-title">松鼠世界能为你做什么</h2>
+                </div>
+                <span>点击卡片进入对应模块</span>
+              </header>
+              <div className="home-feature-grid">
+                {visibleHomeFeatures.map((feature) => (
+                  <button
+                    className="home-feature-card"
+                    type="button"
+                    key={feature.module}
+                    onClick={(event) => activateWorkspaceModule(feature.module, event.currentTarget)}
+                  >
+                    <span className="workspace-nav-icon" aria-hidden="true">{WORKSPACE_MODULE_ICONS[feature.module]}</span>
+                    <span><b>{feature.title}</b><small>{feature.description}</small></span>
+                    <i aria-hidden="true">›</i>
+                  </button>
+                ))}
+              </div>
+              {visibleHomeFeatures.length === 0 ? (
+                <p className="feature-search-empty" role="status">没有匹配的首页功能，请从左侧导航进入全部模块。</p>
+              ) : null}
+            </section>
+
+            <section className="dashboard-metrics" aria-label="仪表盘核心指标">
+              <Metric label="累计 Token" value={usageCards.totalTokens} detail="所有 Agent 调用" />
+              <Metric label="预估费用" value={usageCards.totalCost} detail="按模型价格计算" />
+              <Metric label="岗位池" value={jobs.length.toString()} detail={searchMode === "demo" ? "Demo 搜索结果" : "浏览器真实模式"} />
+              <Metric label="投递记录" value={totalApplications.toString()} detail="人工确认后入库" />
+            </section>
+          </>
+        ) : (
+          <header className="workspace-page-heading">
+            <p className="eyebrow">Squirrel World · Workspace</p>
+            <h1>{activeModuleMeta.label}</h1>
+            <p>{activeModuleMeta.description}</p>
+          </header>
+        )}
 
       {error ? (
         <div className="alert" role="alert">
@@ -1351,7 +1863,7 @@ function App() {
         </div>
       ) : null}
 
-      <Panel title="系统状态 / 后端控制台" kicker="System Health">
+      <Panel title="系统状态" kicker="System Health" className="module-panel module-dashboard module-settings health-panel">
         <div className={`system-health-headline tone-${systemHealthSummary.tone}`}>
           <div>
             <span>总体状态</span>
@@ -1413,7 +1925,7 @@ function App() {
 
       <section className="workspace-grid">
         <div className="stack">
-          <Panel title="简历上传" kicker="Resume Intake">
+          <Panel title="简历上传" kicker="Resume Intake" className="module-panel module-materials resume-panel">
             <form className="upload-form" onSubmit={handleUpload}>
               <label className="file-drop">
                 <input
@@ -1472,7 +1984,7 @@ function App() {
             )}
           </Panel>
 
-          <Panel title="模型 / API" kicker="LLM Agent">
+          <Panel title="模型 / API" kicker="LLM Agent" className="module-panel module-settings model-panel">
             <div className="model-simple-card">
               <div>
                 <span>当前主模型</span>
@@ -1638,7 +2150,7 @@ function App() {
             </details>
           </Panel>
 
-          <Panel title="搜索任务" kicker="Search Run">
+          <Panel title="搜索任务" kicker="Search Run" className="module-panel module-jobs search-panel">
             <form className="search-form" onSubmit={handleSearch}>
               <label>
                 <span>关键词</span>
@@ -1797,7 +2309,7 @@ function App() {
           </Panel>
         </div>
 
-        <Panel title="进展看板" kicker="Pipeline" className="pipeline-panel">
+        <Panel title="求职进度漏斗" kicker="Application Journey" className="module-panel module-applications pipeline-panel">
           {busy.boot ? (
             <LoadingRows count={7} />
           ) : applications.length ? (
@@ -1817,7 +2329,7 @@ function App() {
           )}
         </Panel>
 
-        <Panel title="成本看板" kicker="LLM Cost" className="cost-panel">
+        <Panel title="Token 消费" kicker="LLM Cost" className="module-panel module-dashboard cost-panel">
           <div className="cost-grid">
             <Metric label="总 Token" value={usageCards.totalTokens} detail="估算调用量" />
             <Metric label="总成本" value={usageCards.totalCost} detail="USD" />
@@ -1845,10 +2357,28 @@ function App() {
             )}
           </div>
         </Panel>
+        <Panel title="最近动作" kicker="Recent Activity" className="module-panel module-agents recent-actions-panel">
+          {agentEvents?.events.length ? (
+            <div className="recent-action-list">
+              {agentEvents.events.slice(0, 8).map((event) => (
+                <article className={`recent-action status-${event.status}`} key={event.id}>
+                  <span className="recent-action-dot" aria-hidden="true" />
+                  <div>
+                    <b>{event.agent_name}</b>
+                    <p>{event.step || event.output_summary || "完成一次本地任务"}</p>
+                  </div>
+                  <small>{event.created_at ? formatDateTime(event.created_at) : event.status}</small>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="暂无运行记录" text="执行简历解析、岗位搜索或材料生成后，最近动作会显示在这里。" />
+          )}
+        </Panel>
       </section>
 
       <section className="agent-monitor">
-        <Panel title="Agent 状态" kicker="Runtime Trace">
+        <Panel title="Agent 状态" kicker="Runtime Trace" className="module-panel module-agents agent-status-panel">
           <div className="agent-monitor-head">
             <span>当前运行：{runningAgent ?? "无"}</span>
             <b>当前任务总成本 {agentCost}</b>
@@ -1919,8 +2449,337 @@ function App() {
         </Panel>
       </section>
 
+      <section className="evidence-lab" aria-label="可信经历资料库">
+        <Panel title="可信经历资料库" kicker="Evidence Vault" className="module-panel module-materials evidence-library-panel">
+          <div className="evidence-manifesto">
+            <div>
+              <span>01 / COLLECT</span>
+              <b>上传真实资料</b>
+              <small>原文件只保存在本地 SQLite。</small>
+            </div>
+            <div>
+              <span>02 / VERIFY</span>
+              <b>确认经历卡片</b>
+              <small>草稿和拒绝卡片不能参与生成。</small>
+            </div>
+            <div>
+              <span>03 / TRACE</span>
+              <b>逐条核验输出</b>
+              <small>修改后自动回到待核验状态。</small>
+            </div>
+          </div>
+
+          {evidenceMessage ? <p className="evidence-message">{evidenceMessage}</p> : null}
+
+          <form className="evidence-upload" onSubmit={handleEvidenceUpload}>
+            <label className="file-drop evidence-file-drop">
+              <input
+                type="file"
+                multiple
+                accept=".docx,.pdf,.txt,.md,.png,.jpg,.jpeg"
+                onChange={(event) => setEvidenceFiles(Array.from(event.target.files ?? []))}
+              />
+              <span>{evidenceFiles.length ? `已选择 ${evidenceFiles.length} 份资料` : "选择个人资料文件"}</span>
+              <small>优先支持 DOCX / 可提取文字的 PDF / TXT / MD；扫描件失败后可手工补全文本。</small>
+            </label>
+            <button className="primary" type="submit" disabled={busy.evidenceUpload}>
+              {busy.evidenceUpload ? "上传中..." : "加入本地资料库"}
+            </button>
+          </form>
+
+          <div className="evidence-source-grid">
+            {evidenceSources.length ? evidenceSources.map((source) => (
+              <article className="evidence-source-card" key={source.id}>
+                <header>
+                  <div>
+                    <b>{source.filename}</b>
+                    <small>{source.file_type.toUpperCase()} · {formatDateTime(source.updated_at)}</small>
+                  </div>
+                  <span className={`chip ${source.manual_text_required ? "warning" : "positive"}`}>
+                    {source.manual_text_required ? "需要补全文本" : `${source.extraction_method || "待解析"} 已读取`}
+                  </span>
+                </header>
+                <p>{source.raw_text ? `${source.raw_text.slice(0, 120)}${source.raw_text.length > 120 ? "..." : ""}` : "暂无可用正文"}</p>
+                {source.warnings.map((warning) => <small className="evidence-warning" key={warning}>{warning}</small>)}
+                {source.manual_text_required ? (
+                  <label>
+                    <span>手工补全正文</span>
+                    <textarea
+                      rows={4}
+                      value={evidenceSourceTexts[source.id] ?? ""}
+                      onChange={(event) =>
+                        setEvidenceSourceTexts((current) => ({ ...current, [source.id]: event.target.value }))
+                      }
+                    />
+                  </label>
+                ) : null}
+                <div className="evidence-actions">
+                  {source.manual_text_required ? (
+                    <button
+                      type="button"
+                      disabled={busy.evidenceSourceId === source.id}
+                      onClick={() => void handleEvidenceSourceManualText(source)}
+                    >
+                      保存正文
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={busy.evidenceSourceId === source.id}
+                      onClick={() => void handleExtractEvidenceCards(source)}
+                    >
+                      {busy.evidenceSourceId === source.id ? "处理中..." : "提取候选卡片"}
+                    </button>
+                  )}
+                  <button
+                    className="danger-quiet"
+                    type="button"
+                    disabled={busy.evidenceSourceId === source.id}
+                    onClick={() => void handleDeleteEvidenceSource(source)}
+                  >
+                    删除资料
+                  </button>
+                </div>
+              </article>
+            )) : (
+              <EmptyState title="资料库还是空的" text="先放入简历、项目说明或实习总结；资料不会直接变成可用事实。" />
+            )}
+          </div>
+
+          <div className="evidence-section-heading">
+            <div>
+              <span>EXPERIENCE CARDS</span>
+              <h3>候选经历卡片</h3>
+            </div>
+            <small>{confirmedEvidenceCards.length} 张已确认 / {evidenceCards.length} 张全部</small>
+          </div>
+
+          <form className="manual-card-form" onSubmit={handleCreateManualEvidenceCard}>
+            <div className="manual-card-title">
+              <b>手工补充真实经历</b>
+              <span className="chip warning">将标记为用户自述</span>
+            </div>
+            <label>
+              <span>标题</span>
+              <input
+                value={manualEvidenceDraft.title}
+                onChange={(event) => setManualEvidenceDraft((current) => ({ ...current, title: event.target.value }))}
+                placeholder="例如：求职 Agent 工作台"
+              />
+            </label>
+            <label>
+              <span>类别</span>
+              <select
+                value={manualEvidenceDraft.category}
+                onChange={(event) => setManualEvidenceDraft((current) => ({ ...current, category: event.target.value }))}
+              >
+                {Object.entries(EVIDENCE_CATEGORY_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+              </select>
+            </label>
+            <label className="wide-field">
+              <span>背景 / 场景</span>
+              <input
+                value={manualEvidenceDraft.situation}
+                onChange={(event) => setManualEvidenceDraft((current) => ({ ...current, situation: event.target.value }))}
+                placeholder="只写真实发生的背景"
+              />
+            </label>
+            <label className="wide-field">
+              <span>行动（每行一条）</span>
+              <textarea
+                rows={3}
+                value={manualEvidenceDraft.actions}
+                onChange={(event) => setManualEvidenceDraft((current) => ({ ...current, actions: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>结果</span>
+              <textarea
+                rows={3}
+                value={manualEvidenceDraft.results}
+                onChange={(event) => setManualEvidenceDraft((current) => ({ ...current, results: event.target.value }))}
+              />
+            </label>
+            <label>
+              <span>技能</span>
+              <textarea
+                rows={3}
+                value={manualEvidenceDraft.skills}
+                onChange={(event) => setManualEvidenceDraft((current) => ({ ...current, skills: event.target.value }))}
+              />
+            </label>
+            <button type="submit" disabled={busy.evidenceCardId === -1}>新增候选卡片</button>
+          </form>
+
+          <div className="evidence-card-grid">
+            {evidenceCards.length ? evidenceCards.map((card) => {
+              const draft = evidenceCardDrafts[card.id] ?? evidenceCardToDraft(card);
+              return (
+                <article className={`evidence-card status-${card.status}`} key={card.id}>
+                  <header>
+                    <span className="evidence-index">#{String(card.id).padStart(2, "0")}</span>
+                    <div>
+                      <span className={`chip ${card.provenance_type === "document" ? "positive" : "warning"}`}>
+                        {card.provenance_type === "document" ? "文件证据" : "用户自述"}
+                      </span>
+                      <span className={`chip ${card.status === "confirmed" ? "positive" : card.status === "rejected" ? "warning" : ""}`}>
+                        {card.status === "confirmed" ? "已确认" : card.status === "rejected" ? "已拒绝" : "待确认"}
+                      </span>
+                    </div>
+                  </header>
+                  <label>
+                    <span>卡片标题</span>
+                    <input value={draft.title} onChange={(event) => updateEvidenceCardDraft(card, "title", event.target.value)} />
+                  </label>
+                  <div className="evidence-card-meta">
+                    <label>
+                      <span>类别</span>
+                      <select value={draft.category} onChange={(event) => updateEvidenceCardDraft(card, "category", event.target.value)}>
+                        {Object.entries(EVIDENCE_CATEGORY_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <span>组织</span>
+                      <input value={draft.organization} onChange={(event) => updateEvidenceCardDraft(card, "organization", event.target.value)} />
+                    </label>
+                    <label>
+                      <span>时间</span>
+                      <input value={draft.time_range} onChange={(event) => updateEvidenceCardDraft(card, "time_range", event.target.value)} />
+                    </label>
+                  </div>
+                  <label>
+                    <span>背景 / 场景</span>
+                    <textarea rows={3} value={draft.situation} onChange={(event) => updateEvidenceCardDraft(card, "situation", event.target.value)} />
+                  </label>
+                  <label>
+                    <span>行动（每行一条）</span>
+                    <textarea rows={3} value={draft.actions} onChange={(event) => updateEvidenceCardDraft(card, "actions", event.target.value)} />
+                  </label>
+                  <div className="evidence-card-meta two-columns">
+                    <label>
+                      <span>结果</span>
+                      <textarea rows={2} value={draft.results} onChange={(event) => updateEvidenceCardDraft(card, "results", event.target.value)} />
+                    </label>
+                    <label>
+                      <span>技能</span>
+                      <textarea rows={2} value={draft.skills} onChange={(event) => updateEvidenceCardDraft(card, "skills", event.target.value)} />
+                    </label>
+                  </div>
+                  {card.provenance_type === "document" ? (
+                    <blockquote>
+                      <b>{card.quote_verified ? "原文已定位" : "原文未定位"}</b>
+                      <span>{card.source_quote}</span>
+                    </blockquote>
+                  ) : <small className="evidence-warning">这张卡片来自用户手工补充，不会显示为文件证据。</small>}
+                  <div className="evidence-actions">
+                    <button type="button" disabled={busy.evidenceCardId === card.id} onClick={() => void handleSaveEvidenceCard(card, "draft")}>保存草稿</button>
+                    <button className="primary" type="button" disabled={busy.evidenceCardId === card.id} onClick={() => void handleSaveEvidenceCard(card, "confirmed")}>确认事实</button>
+                    <button type="button" disabled={busy.evidenceCardId === card.id} onClick={() => void handleSaveEvidenceCard(card, "rejected")}>拒绝</button>
+                    <button className="danger-quiet" type="button" disabled={busy.evidenceCardId === card.id} onClick={() => void handleDeleteEvidenceCard(card)}>删除</button>
+                  </div>
+                </article>
+              );
+            }) : <EmptyState title="还没有候选卡片" text="从资料中提取，或手工补充一张真实经历卡片。" />}
+          </div>
+        </Panel>
+
+        <Panel title="按 JD 可信生成" kicker="Grounded Tailor" className="module-panel module-studio evidence-tailor-panel">
+          <div className="trusted-job-banner">
+            <span>当前岗位</span>
+            <b>{selectedJob ? `${selectedJob.company} · ${selectedJob.title}` : "尚未选择岗位"}</b>
+            <small>先在下方岗位池选择岗位；这里不会改变原有岗位匹配和投递流程。</small>
+          </div>
+          <div className="evidence-actions">
+            <button type="button" disabled={!selectedJob || busy.evidenceRecommend} onClick={() => void handleRecommendEvidence()}>
+              {busy.evidenceRecommend ? "分析中..." : "根据 JD 推荐经历"}
+            </button>
+            <button className="primary" type="button" disabled={!resume || !selectedEvidenceCardIds.length || busy.trustedTailorJobId !== null} onClick={() => void handleGenerateTrustedTailor()}>
+              {busy.trustedTailorJobId !== null ? "生成中..." : `使用 ${selectedEvidenceCardIds.length} 张卡片生成`}
+            </button>
+          </div>
+
+          <div className="recommendation-list">
+            {evidenceRecommendations.length ? evidenceRecommendations.map((recommendation) => (
+              <label className={`recommendation-card ${selectedEvidenceCardIds.includes(recommendation.card.id) ? "is-selected" : ""}`} key={recommendation.card.id}>
+                <input
+                  type="checkbox"
+                  checked={selectedEvidenceCardIds.includes(recommendation.card.id)}
+                  onChange={() => toggleEvidenceCard(recommendation.card.id)}
+                />
+                <div>
+                  <b>{recommendation.card.title}</b>
+                  <span>{recommendation.hit_reasons.join(" · ")}</span>
+                  <small>相关度 {recommendation.score} / 100 · {recommendation.card.provenance_type === "document" ? "文件证据" : "用户自述"}</small>
+                </div>
+              </label>
+            )) : confirmedEvidenceCards.length ? (
+              <EmptyState title="等待 JD 推荐" text="点击上方按钮，系统只会从已确认卡片中推荐。" />
+            ) : (
+              <EmptyState title="没有可用证据" text="至少确认一张经历卡片后才能生成可信简历。" />
+            )}
+          </div>
+
+          {trustedTailor ? (
+            <div className="trusted-tailor-result">
+              <div className="trusted-result-heading">
+                <div>
+                  <span>生成模式</span>
+                  <b>{trustedTailor.generation_mode === "external_ai" ? "外部模型 · 严格证据约束" : "本地安全模式"}</b>
+                </div>
+                <span className={`truth-badge ${trustedTailor.review.trusted_evidence_finalized ? "pass" : "risk"}`}>
+                  {trustedTailor.review.trusted_evidence_finalized ? "已定稿" : "等待逐条核验"}
+                </span>
+              </div>
+              <div className="trusted-claim-list">
+                {trustedTailor.claims.map((claim) => (
+                  <article className={`trusted-claim status-${claim.support_status}`} key={claim.id}>
+                    <header>
+                      <b>简历内容 #{claim.id}</b>
+                      <span>{claim.user_decision === "accepted" ? "已接受" : claim.user_decision === "rejected" ? "不采用" : claim.support_status === "needs_review" ? "修改后待复核" : "待确认"}</span>
+                    </header>
+                    <textarea
+                      rows={4}
+                      value={trustedClaimDrafts[claim.id] ?? claim.text}
+                      onChange={(event) => setTrustedClaimDrafts((current) => ({ ...current, [claim.id]: event.target.value }))}
+                    />
+                    <div className="claim-evidence-links">
+                      {claim.evidence_card_ids.map((cardId) => {
+                        const card = evidenceCardsById.get(cardId);
+                        return <span className="chip positive" key={cardId}>证据 #{cardId} · {card?.title ?? "卡片已删除"}</span>;
+                      })}
+                    </div>
+                    <div className="evidence-actions">
+                      <button type="button" disabled={busy.trustedClaimId === claim.id} onClick={() => void handleTrustedClaim(claim.id, "save")}>保存修改</button>
+                      <button className="primary" type="button" disabled={busy.trustedClaimId === claim.id} onClick={() => void handleTrustedClaim(claim.id, "accept")}>核对证据并接受</button>
+                      <button type="button" disabled={busy.trustedClaimId === claim.id} onClick={() => void handleTrustedClaim(claim.id, "reject")}>不采用</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <div className="trusted-finalize-bar">
+                <div>
+                  <b>导出门槛</b>
+                  <span>所有保留内容必须处于“已支持 + 已接受”。</span>
+                </div>
+                <button type="button" disabled={busy.trustedFinalizeId === trustedTailor.id} onClick={() => void handleFinalizeTrustedTailor()}>
+                  {busy.trustedFinalizeId === trustedTailor.id ? "定稿中..." : "完成核验并定稿"}
+                </button>
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={!trustedTailor.review.trusted_evidence_finalized}
+                  onClick={() => void handleDownloadTailoredPdf(trustedTailor)}
+                >
+                  导出模板化 PDF
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </Panel>
+      </section>
+
       <section className="table-layout">
-        <Panel title="岗位筛选表" kicker="Job Pool" className="jobs-panel">
+        <Panel title="岗位筛选表" kicker="Job Pool" className="module-panel module-jobs jobs-panel">
           <div className="toolbar">
             <label>
               平台
@@ -2049,7 +2908,7 @@ function App() {
           )}
         </Panel>
 
-        <Panel title="人审材料" kicker="Tailor Review" className="review-panel">
+        <Panel title="人审材料" kicker="Tailor Review" className="module-panel module-studio review-panel">
           {selectedJob ? (
             <>
               <div className="review-heading">
@@ -2251,7 +3110,7 @@ function App() {
       </section>
 
       <section className="analytics-layout">
-        <Panel title="投递结果表" kicker="Applications">
+        <Panel title="投递结果表" kicker="Applications" className="module-panel module-applications applications-panel">
           <div className="sync-console">
             <div>
               <b>投递状态只读同步</b>
@@ -2415,7 +3274,7 @@ function App() {
           )}
         </Panel>
 
-        <Panel title="转化统计" kicker="Read / Reply / Progress">
+        <Panel title="转化统计" kicker="Read / Reply / Progress" className="module-panel module-applications conversion-panel">
           <div className="rate-summary">
             <RateCard title="已读率" bucket={analytics?.totals} rateKey="read_rate" countKey="read" />
             <RateCard title="回复率" bucket={analytics?.totals} rateKey="reply_rate" countKey="replied" />
@@ -2520,7 +3379,8 @@ function App() {
           </aside>
         </div>
       ) : null}
-    </main>
+      </main>
+    </div>
   );
 }
 

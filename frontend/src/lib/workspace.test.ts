@@ -5,6 +5,7 @@ import {
   getWorkspaceModule,
   HOME_FEATURES,
   WORKSPACE_NAV_ITEMS,
+  WORKSPACE_PANEL_TITLES,
 } from "./workspace";
 
 describe("workspace navigation", () => {
@@ -45,5 +46,12 @@ describe("workspace navigation", () => {
       label: "Agent 运行",
       description: "运行状态与最近动作",
     });
+  });
+
+  it("places the funnel and activity history outside the dashboard", () => {
+    expect(WORKSPACE_PANEL_TITLES.dashboard).not.toContain("求职进度漏斗");
+    expect(WORKSPACE_PANEL_TITLES.dashboard).not.toContain("最近动作");
+    expect(WORKSPACE_PANEL_TITLES.applications).toContain("求职进度漏斗");
+    expect(WORKSPACE_PANEL_TITLES.agents).toContain("最近动作");
   });
 });

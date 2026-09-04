@@ -58,6 +58,16 @@ export const HOME_FEATURES: HomeFeature[] = [
   },
 ];
 
+export const WORKSPACE_PANEL_TITLES: Record<WorkspaceModule, string[]> = {
+  dashboard: ["Token 消费", "系统状态"],
+  materials: ["简历上传", "可信经历资料库"],
+  jobs: ["搜索任务", "岗位筛选表"],
+  studio: ["按 JD 可信生成", "人审材料"],
+  applications: ["求职进度漏斗", "投递结果表", "转化统计"],
+  agents: ["Agent 状态", "最近动作"],
+  settings: ["系统状态", "模型 / API"],
+};
+
 export function filterHomeFeatures(query: string): HomeFeature[] {
   const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
   if (!normalizedQuery) return HOME_FEATURES;
