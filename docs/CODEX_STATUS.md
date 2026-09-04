@@ -3154,3 +3154,52 @@ Updated: 2026-07-03 Asia/Shanghai
 ### 剩余事项
 
 - 本次两项界面修正已完成，无剩余开发项。
+
+## 2026-09-04：资料工作台主题前端与实施计划（complete）
+
+### 本阶段完成
+
+- 将“简历与资料”重构为“资料工作台”，页头使用松鼠世界森林绿、橙色和奶油白品牌视觉，并继续展示最终松鼠 Logo。
+- 资料页以四张等高卡片展示资料上传、在线预览、OCR 识别和 WPS 在线编辑；后 3 项明确标记为“下一阶段接入”。
+- 用统一资料上传区、资料处理路线和 6 组格式地图替换原“简历上传/可信经历资料库”页面模块。
+- 前端文件选择支持并分类 WPS 常见格式、图片、PDF、ZIP、7Z、7P、HTML、PY、MP3、MP4、MKV、MD 和 TXT 等 29 个扩展名。
+- 新增 `docs/MATERIAL_WORKSPACE_PLAN.md`，记录安全上传、预览、OCR、WPS 编辑、版本归档与测试验收顺序；本轮未实现这些后端能力。
+- 前端代码提交 `459d209` 已推送到 `origin/codex/resume-model-ops-stage`，远程 HEAD 与本地一致；本次计划文档通过提交信息 `Document materials processing implementation plan` 跟踪。
+
+### 修改文件
+
+- `frontend/src/App.tsx`
+- `frontend/src/styles.css`
+- `frontend/src/lib/workspace.ts`
+- `frontend/src/lib/materials.ts`
+- `frontend/src/lib/materials.test.ts`
+- `README.md`
+- `docs/MATERIAL_WORKSPACE_PLAN.md`
+- `docs/CODEX_STATUS.md`
+
+### 启动或验证
+
+- 完整启动：`.\scripts\start-project.ps1 -SkipInstall`
+- 工作台：`http://127.0.0.1:5173`
+- 点击左侧常驻导航“资料工作台”，查看主题页头、四个能力入口、统一上传区、处理路线和格式地图。
+
+### 验证结果
+
+- 后端全量：`119 passed`；仅有 reportlab 的 Python 3.14 弃用警告。
+- 前端全量：`52 passed`；`npm run lint` 和 `npm run build` 均通过。
+- Playwright 桌面端 `1600×1000`：四张能力卡均为 `313×182px`；上传区与处理路线均为 `518px` 高；页面无横向溢出；旧的两个资料模块不可见。
+- Playwright 移动端 `390×844`：四张能力卡均为 `362×160px`；页面横向滚动宽度等于视口宽度；底部导航固定显示。
+- 实际选择 `README.md`：页面识别为“压缩包与源码”，显示大小并将待处理数更新为 1；清空操作恢复为 0。
+- 浏览器控制台：`0 errors, 0 warnings`。
+
+### 浏览器中应该看到什么
+
+- 顶部是带星点、环形装饰和松鼠 Logo 的森林绿品牌横幅，不再是空白通用标题条。
+- 下方四个能力入口等高对称；资料上传和处理路线左右对齐；格式地图按六类展示全部扩展名。
+- 桌面完整侧栏始终显示，手机端保持底部导航；资料页不再显示原“简历上传”和“可信经历资料库”模块。
+
+### 剩余事项 / 下一步
+
+- 在线预览、OCR、WPS 编辑、真实上传和资料库归档仍未实现，严格按 `docs/MATERIAL_WORKSPACE_PLAN.md` 后续分阶段开发。
+- `.7p` 已按需求保留为前端入口；接入解压前必须确认其真实格式或是否为 `.7z` 别名。
+- WPS 编辑实现前需要确定使用本机 WPS 客户端还是 WPS 开放平台网页编辑，并准备相应授权配置。
