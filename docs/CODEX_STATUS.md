@@ -3088,6 +3088,7 @@ Updated: 2026-07-03 Asia/Shanghai
 - `1e1b5f7`：正式工作台迁移为松鼠世界模块化 UI。
 - `695f75d`：加入通过测试的 Windows 一键启停脚本。
 - `cbe4661`：加入可编辑最终 Logo 与结构测试。
+- `04ea327`：归档可编辑的早期 Logo 备选稿并补充导出完整性测试。
 - `4e0a27b`、`6b8e84f`：加入可信经历研究、PRD、评测与作品集正式文件及完整性测试。
 - 上述提交均已推送到 `origin/codex/resume-model-ops-stage`；推送后本地与远端 `HEAD` 核对一致。
 
@@ -3102,7 +3103,7 @@ Updated: 2026-07-03 Asia/Shanghai
 
 ### 验证结果
 
-- 后端全量：`116 passed`；仅有 reportlab 的 Python 3.14 弃用警告。
+- 后端全量：`117 passed`；仅有 reportlab 的 Python 3.14 弃用警告。
 - 前端全量：`49 passed`；`npm run lint` 和 `npm run build` 均通过。
 - PowerShell 解析：`start-project.ps1`、`stop-project.ps1` 均通过语法检查。
 - 启动脚本实测：能够识别并复用 `8000` 后端和 `5173` 前端，两个健康检查均通过。
