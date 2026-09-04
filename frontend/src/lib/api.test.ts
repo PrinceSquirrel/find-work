@@ -575,6 +575,75 @@ describe("api client", () => {
     );
   });
 
+  test("trusted evidence endpoints keep file upload, card selection, and claim confirmation explicit", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 9, claims: [] })
+    } as Response);
+    const file = new File(["项目：可信经历库"], "project.md", { type: "text/markdown" });
+
+    await api.uploadEvidenceSource(file);
+    await api.extractEvidenceCards(3);
+    await api.updateEvidenceCard(7, { status: "confirmed" });
+    await api.getEvidenceRecommendations(11);
+    await api.generateTrustedTailor(11, 5, [7]);
+    await api.updateTailoredClaim(13, {
+      text: "负责可信经历资料库需求分析",
+      evidence_card_ids: [7],
+      user_decision: "accepted",
+      confirm_support: true
+    });
+    await api.finalizeTrustedTailor(9);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/evidence-sources",
+      expect.objectContaining({ method: "POST", body: expect.any(FormData), headers: {} })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/evidence-sources/3/extract-cards",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/evidence-cards/7",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ status: "confirmed" }) })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/jobs/11/evidence-recommendations",
+      expect.objectContaining({ headers: expect.objectContaining({ "Content-Type": "application/json" }) })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/jobs/11/evidence-tailor",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ resume_id: 5, evidence_card_ids: [7] })
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "/api/tailored-claims/13",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          text: "负责可信经历资料库需求分析",
+          evidence_card_ids: [7],
+          user_decision: "accepted",
+          confirm_support: true
+        })
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
+      "/api/trusted-tailors/9/finalize",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
   test("searchPlatformJobs sends keywords and city to the CDP search endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

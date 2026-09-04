@@ -109,6 +109,103 @@ export interface TailorBundle extends TailoredResume {
   review: Record<string, unknown>;
 }
 
+export type EvidenceCardStatus = "draft" | "confirmed" | "rejected";
+
+export interface EvidenceSource {
+  id: number;
+  filename: string;
+  file_type: string;
+  raw_text: string;
+  extraction_status: string;
+  extraction_method: string;
+  extraction_confidence: number;
+  manual_text_required: boolean;
+  warnings: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvidenceCard {
+  id: number;
+  source_id: number | null;
+  category: string;
+  title: string;
+  organization: string;
+  time_range: string;
+  situation: string;
+  actions: string[];
+  results: string[];
+  skills: string[];
+  status: EvidenceCardStatus;
+  provenance_type: "document" | "user_statement" | string;
+  source_quote: string;
+  source_start: number | null;
+  source_end: number | null;
+  quote_verified: boolean;
+  user_note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvidenceCardCreate {
+  category: string;
+  title: string;
+  organization?: string;
+  time_range?: string;
+  situation?: string;
+  actions?: string[];
+  results?: string[];
+  skills?: string[];
+  user_note?: string;
+}
+
+export interface EvidenceCardUpdate extends Partial<EvidenceCardCreate> {
+  status?: EvidenceCardStatus;
+  source_quote?: string;
+}
+
+export interface EvidenceRecommendation {
+  card: EvidenceCard;
+  score: number;
+  hit_reasons: string[];
+  jd_requirements: string[];
+}
+
+export interface TailoredClaim {
+  id: number;
+  tailored_resume_id: number;
+  text: string;
+  evidence_card_ids: number[];
+  support_status: "supported" | "needs_review" | "rejected" | string;
+  user_decision: "pending" | "accepted" | "rejected" | string;
+  edit_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TailoredClaimUpdate {
+  text?: string;
+  evidence_card_ids?: number[];
+  user_decision?: "pending" | "accepted" | "rejected";
+  confirm_support?: boolean;
+}
+
+export interface TrustedTailorBundle extends TailorBundle {
+  claims: TailoredClaim[];
+  generation_mode?: "local_safe" | "external_ai" | string;
+  source_resume_filename?: string;
+}
+
+export interface EvidenceSourceDeleteImpact {
+  source_id: number;
+  card_count: number;
+  claim_count: number;
+  tailored_resume_count: number;
+  requires_cascade: boolean;
+  deleted?: boolean;
+  cascade?: boolean;
+}
+
 export interface TailoredResumeRevision {
   id: number;
   job_id: number;

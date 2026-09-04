@@ -9,6 +9,12 @@ import type {
   BrowserJobExtractRequest,
   BrowserJobExtractResponse,
   BrowserJobSearchRequest,
+  EvidenceCard,
+  EvidenceCardCreate,
+  EvidenceCardUpdate,
+  EvidenceRecommendation,
+  EvidenceSource,
+  EvidenceSourceDeleteImpact,
   JobPosting,
   LLMUsageSummary,
   ManualJobDetailRequest,
@@ -26,7 +32,10 @@ import type {
   SystemHealthResponse,
   TailoredResumePreview,
   TailoredResumeRevision,
-  TailorBundle
+  TailoredClaim,
+  TailoredClaimUpdate,
+  TailorBundle,
+  TrustedTailorBundle
 } from "../types";
 import type { BackendAgentEventsSnapshot } from "./dashboard";
 
@@ -98,6 +107,97 @@ export const api = {
     return request<ResumeDraft>(`/api/resumes/${encodeURIComponent(resumeId)}/manual-text`, {
       method: "PATCH",
       body: JSON.stringify(payload)
+    });
+  },
+
+  uploadEvidenceSource(file: File): Promise<EvidenceSource> {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request<EvidenceSource>("/api/evidence-sources", {
+      method: "POST",
+      body: formData
+    });
+  },
+
+  listEvidenceSources(): Promise<EvidenceSource[]> {
+    return request<EvidenceSource[]>("/api/evidence-sources");
+  },
+
+  updateEvidenceSourceManualText(sourceId: number, rawText: string): Promise<EvidenceSource> {
+    return request<EvidenceSource>(`/api/evidence-sources/${encodeURIComponent(sourceId)}/manual-text`, {
+      method: "PATCH",
+      body: JSON.stringify({ raw_text: rawText })
+    });
+  },
+
+  getEvidenceSourceDeleteImpact(sourceId: number): Promise<EvidenceSourceDeleteImpact> {
+    return request<EvidenceSourceDeleteImpact>(`/api/evidence-sources/${encodeURIComponent(sourceId)}/delete-impact`);
+  },
+
+  deleteEvidenceSource(sourceId: number, cascade = false): Promise<EvidenceSourceDeleteImpact> {
+    const query = cascade ? "?cascade=true" : "";
+    return request<EvidenceSourceDeleteImpact>(`/api/evidence-sources/${encodeURIComponent(sourceId)}${query}`, {
+      method: "DELETE"
+    });
+  },
+
+  extractEvidenceCards(sourceId: number): Promise<EvidenceCard[]> {
+    return request<EvidenceCard[]>(`/api/evidence-sources/${encodeURIComponent(sourceId)}/extract-cards`, {
+      method: "POST"
+    });
+  },
+
+  listEvidenceCards(sourceId?: number, status?: string): Promise<EvidenceCard[]> {
+    const query = new URLSearchParams();
+    if (sourceId !== undefined) query.set("source_id", String(sourceId));
+    if (status) query.set("status", status);
+    const suffix = query.size ? `?${query.toString()}` : "";
+    return request<EvidenceCard[]>(`/api/evidence-cards${suffix}`);
+  },
+
+  createEvidenceCard(payload: EvidenceCardCreate): Promise<EvidenceCard> {
+    return request<EvidenceCard>("/api/evidence-cards", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  updateEvidenceCard(cardId: number, payload: EvidenceCardUpdate): Promise<EvidenceCard> {
+    return request<EvidenceCard>(`/api/evidence-cards/${encodeURIComponent(cardId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  deleteEvidenceCard(cardId: number): Promise<void> {
+    return request<void>(`/api/evidence-cards/${encodeURIComponent(cardId)}`, { method: "DELETE" });
+  },
+
+  getEvidenceRecommendations(jobId: number): Promise<EvidenceRecommendation[]> {
+    return request<EvidenceRecommendation[]>(`/api/jobs/${encodeURIComponent(jobId)}/evidence-recommendations`);
+  },
+
+  generateTrustedTailor(jobId: number, resumeId: number, evidenceCardIds: number[]): Promise<TrustedTailorBundle> {
+    return request<TrustedTailorBundle>(`/api/jobs/${encodeURIComponent(jobId)}/evidence-tailor`, {
+      method: "POST",
+      body: JSON.stringify({ resume_id: resumeId, evidence_card_ids: evidenceCardIds })
+    });
+  },
+
+  getTrustedTailor(tailoredResumeId: number): Promise<TrustedTailorBundle> {
+    return request<TrustedTailorBundle>(`/api/trusted-tailors/${encodeURIComponent(tailoredResumeId)}`);
+  },
+
+  updateTailoredClaim(claimId: number, payload: TailoredClaimUpdate): Promise<TailoredClaim> {
+    return request<TailoredClaim>(`/api/tailored-claims/${encodeURIComponent(claimId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  finalizeTrustedTailor(tailoredResumeId: number): Promise<TrustedTailorBundle> {
+    return request<TrustedTailorBundle>(`/api/trusted-tailors/${encodeURIComponent(tailoredResumeId)}/finalize`, {
+      method: "POST"
     });
   },
 
