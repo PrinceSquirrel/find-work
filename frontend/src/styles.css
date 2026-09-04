@@ -1713,6 +1713,7 @@ body {
 
 .squirrel-app {
   min-height: 100vh;
+  padding-left: 248px;
 }
 
 .squirrel-sidebar {
@@ -1731,25 +1732,16 @@ body {
   border-right: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 0 24px 24px 0;
   box-shadow: 18px 0 45px rgba(16, 63, 56, 0.18);
-  transform: translateX(calc(-100% + 14px));
-  transition: transform 220ms ease, box-shadow 220ms ease;
+  transform: none;
+  transition: box-shadow 220ms ease;
 }
 
 .squirrel-sidebar::before {
-  position: absolute;
-  top: 116px;
-  right: 0;
-  width: 14px;
-  height: 96px;
-  content: "";
-  background: linear-gradient(180deg, #ffc95d, #ef7d2a);
-  border-radius: 12px 0 0 12px;
-  box-shadow: 0 8px 22px rgba(232, 115, 42, 0.35);
+  display: none;
 }
 
 .squirrel-sidebar:hover,
 .squirrel-sidebar:focus-within {
-  transform: translateX(0);
   box-shadow: 26px 0 60px rgba(16, 63, 56, 0.24);
 }
 
@@ -2262,6 +2254,22 @@ button.home-feature-card:focus-visible {
   grid-row: 4;
 }
 
+.squirrel-app[data-active-module="dashboard"] .health-panel,
+.squirrel-app[data-active-module="dashboard"] .cost-panel {
+  align-self: stretch;
+  height: 100%;
+}
+
+.squirrel-app[data-active-module="dashboard"] .cost-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.squirrel-app[data-active-module="dashboard"] .cost-panel .usage-list {
+  flex: 1;
+  align-content: space-between;
+}
+
 .squirrel-app[data-active-module="dashboard"] .dashboard-hero {
   grid-row: 1;
 }
@@ -2420,6 +2428,10 @@ button.home-feature-card:focus-visible {
 }
 
 @media (max-width: 720px) {
+  .squirrel-app {
+    padding-left: 0;
+  }
+
   .squirrel-sidebar {
     inset: auto 0 0;
     width: 100%;
