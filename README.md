@@ -1,4 +1,6 @@
-# agent-business
+# 松鼠世界（agent-business）
+
+![松鼠世界 Logo](outputs/squirrel-world-logo-20260903/squirrel-world-logo-v2-512.png)
 
 本项目是一个本地单用户求职投递多 Agent 工作台。它把简历解析、真实浏览器 CDP 岗位搜索、岗位匹配、简历改写、招呼语生成、真实平台投递确认、投递状态跟踪、LLM token/金额统计和投递数据分析串成一条可验证的工作流。
 
@@ -12,11 +14,72 @@
 - 平台适配器：`backend/app/platforms/` 保留 Boss 直聘和实习僧的 demo adapter；真实平台能力由 `backend/app/services/browser_job_extractor_service.py` 通过 CDP 控制已登录浏览器页面完成。
 - 服务编排：`backend/app/services/job_application_service.py` 串联简历、岗位、改写、投递和分析流程。
 - 测试：`backend/tests/`，使用 demo/fake CDP 数据、临时 SQLite 和本地 token 估算；自动测试不访问真实招聘平台账号。
-- 前端：`frontend/` 提供本地工作台页面，使用 Vite + React。
+- 前端：`frontend/` 提供“松鼠世界”模块化本地工作台，使用 Vite + React。
+
+## 工作台模块
+
+- **仪表盘**：Token、费用与系统状态概览，不再混放求职漏斗和最近动作。
+- **简历与资料**：简历上传、可信经历卡片和原文证据。
+- **岗位雷达**：岗位搜索、筛选和详情核验。
+- **生成中心**：基于已确认事实生成材料并完成人工审核。
+- **投递跟踪**：求职进度漏斗、投递结果和转化统计。
+- **Agent 运行**：Agent 状态与最近动作。
+- **系统设置**：模型、API、CDP 和系统能力检查。
+
+桌面端导航默认只保留左侧引导把手，鼠标靠近或键盘聚焦后展开；移动端自动切换为底部导航。首页包含产品说明、功能搜索和四个快捷入口。
+
+最终品牌文件位于 `outputs/squirrel-world-logo-20260903/`：`squirrel-world-logo-v2.svg` 是可继续编辑的分层矢量源文件，`squirrel-world-logo-v2.png` 和 `squirrel-world-logo-v2-512.png` 是透明背景 PNG 导出。
+
+## 可信经历资料库（AI 产品经理作品集 MVP）
+
+项目现已增加一条独立于普通简历生成的可信闭环：用户上传分散的个人材料，系统提取候选经历卡片；只有用户确认过的卡片才能参与针对完整 JD 的推荐和生成。每条生成内容必须关联有效卡片，用户编辑后会重新变为待核验，存在待核验内容时不能导出最终简历。
+
+- 支持 DOCX、可提取文字的 PDF、TXT、MD；图片和扫描 PDF 解析失败时明确提示手工补全文本。
+- 支持资料列表、解析状态、删除影响预览、候选卡片提取、确认/修改/拒绝、用户自述卡片和原文引用定位。
+- 支持 JD 要求映射、相关卡片推荐、指定卡片可信生成、逐条接受/编辑/拒绝、重新关联证据和最终核验。
+- 后端会拒绝 Draft、Rejected、不存在的卡片 ID 和不存在的文件原文引用，不把格式错误或证据不足静默标记为成功。
+- 原文件保存在本地；调用外部模型时只发送完成当前任务所需的最少文本。XLSX、PPTX、音视频和代码仓库解析不在第一版范围内。
+
+主要接口包括 `POST /api/evidence-sources`、`POST /api/evidence-sources/{id}/extract-cards`、`GET /api/jobs/{id}/evidence-recommendations`、`POST /api/jobs/{id}/evidence-tailor`、`PATCH /api/tailored-claims/{claim_id}` 和 `POST /api/trusted-tailors/{id}/finalize`。可编辑的用户研究、PRD、评测工作簿、评测报告和作品集材料位于 [outputs/trusted-evidence-portfolio-20260817](outputs/trusted-evidence-portfolio-20260817)。
 
 ## 安装
 
 建议使用 Python 3.11+。
+
+### Windows 一键安装并启动
+
+在项目根目录打开 PowerShell，运行：
+
+```powershell
+.\scripts\start-project.ps1
+```
+
+脚本会自动创建 `.venv`、安装后端和前端依赖、启动 FastAPI 与 Vite，并在健康检查通过后打开工作台。Windows 依赖会包含 `pywin32`，用于调用本机 Microsoft Word 执行 DOCX 到 PDF 转换。再次运行时可复用已经启动的服务；依赖已经安装完成后，可用以下命令跳过安装：
+
+```powershell
+.\scripts\start-project.ps1 -SkipInstall
+```
+
+依赖已安装且不希望自动打开浏览器时，完整命令为：
+
+```powershell
+.\scripts\start-project.ps1 -SkipInstall -NoBrowser
+```
+
+停止由脚本启动的服务：
+
+```powershell
+.\scripts\stop-project.ps1
+```
+
+运行日志位于 `data/backend.log`、`data/backend-error.log`、`data/frontend.log` 和 `data/frontend-error.log`。如果 PowerShell 阻止本地脚本，可仅对当前窗口临时放行后再启动：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\start-project.ps1
+```
+
+### 手动安装
 
 ```powershell
 python -m venv .venv
@@ -72,6 +135,15 @@ npm run dev
 ```powershell
 .\.venv\Scripts\Activate.ps1
 python -m pytest
+```
+
+前端完整验证：
+
+```powershell
+cd frontend
+npm test -- --run
+npm run lint
+npm run build
 ```
 
 测试原则：
