@@ -17,6 +17,8 @@ from app.schemas import (
     ApplicationPlatformProof,
     ApplicationRecord,
     ApplicationStatus,
+    EvidenceCard,
+    EvidenceSource,
     GreetingMessage,
     JobMatch,
     JobPosting,
@@ -31,6 +33,7 @@ from app.schemas import (
     ModelProfileUpdate,
     ResumeDraft,
     SearchRun,
+    TailoredClaim,
     TailoredResume,
 )
 
@@ -106,6 +109,52 @@ class SQLiteStore:
                     greeting_json TEXT NOT NULL,
                     review_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS evidence_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename TEXT NOT NULL,
+                    file_type TEXT NOT NULL,
+                    raw_text TEXT NOT NULL,
+                    original_file_bytes BLOB,
+                    extraction_status TEXT NOT NULL,
+                    extraction_method TEXT NOT NULL,
+                    extraction_confidence REAL NOT NULL,
+                    manual_text_required INTEGER NOT NULL,
+                    warnings_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS evidence_cards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id INTEGER,
+                    category TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    organization TEXT NOT NULL,
+                    time_range TEXT NOT NULL,
+                    situation TEXT NOT NULL,
+                    actions_json TEXT NOT NULL,
+                    results_json TEXT NOT NULL,
+                    skills_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    provenance_type TEXT NOT NULL,
+                    source_quote TEXT NOT NULL,
+                    source_start INTEGER,
+                    source_end INTEGER,
+                    quote_verified INTEGER NOT NULL,
+                    user_note TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS tailored_claims (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tailored_resume_id INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    evidence_card_ids_json TEXT NOT NULL,
+                    support_status TEXT NOT NULL,
+                    user_decision TEXT NOT NULL,
+                    edit_version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS applications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -912,6 +961,251 @@ class SQLiteStore:
             raise ValueError("请重新上传 DOCX 简历以保留模板")
         return bytes(row["original_file_bytes"])
 
+    def create_evidence_source(self, source: EvidenceSource, original_file_bytes: bytes) -> EvidenceSource:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO evidence_sources (
+                    filename, file_type, raw_text, original_file_bytes,
+                    extraction_status, extraction_method, extraction_confidence,
+                    manual_text_required, warnings_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source.filename,
+                    source.file_type,
+                    source.raw_text,
+                    original_file_bytes,
+                    source.extraction_status,
+                    source.extraction_method,
+                    source.extraction_confidence,
+                    1 if source.manual_text_required else 0,
+                    json.dumps(source.warnings, ensure_ascii=False),
+                    source.created_at.isoformat(),
+                    source.updated_at.isoformat(),
+                ),
+            )
+        return source.model_copy(update={"id": cursor.lastrowid})
+
+    def list_evidence_sources(self) -> list[EvidenceSource]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM evidence_sources ORDER BY id DESC").fetchall()
+        return [self._evidence_source_from_row(row) for row in rows]
+
+    def get_evidence_source(self, source_id: int) -> EvidenceSource:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM evidence_sources WHERE id = ?", (source_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Evidence source {source_id} not found")
+        return self._evidence_source_from_row(row)
+
+    def update_evidence_source_manual_text(self, source_id: int, raw_text: str) -> EvidenceSource:
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE evidence_sources
+                SET raw_text = ?, extraction_status = 'success', extraction_method = 'manual_text',
+                    extraction_confidence = 1.0, manual_text_required = 0,
+                    warnings_json = '[]', updated_at = ?
+                WHERE id = ?
+                """,
+                (raw_text, now, source_id),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"Evidence source {source_id} not found")
+        return self.get_evidence_source(source_id)
+
+    def evidence_source_delete_impact(self, source_id: int) -> dict[str, Any]:
+        self.get_evidence_source(source_id)
+        with self._connect() as conn:
+            card_rows = conn.execute("SELECT id FROM evidence_cards WHERE source_id = ?", (source_id,)).fetchall()
+            card_ids = {int(row["id"]) for row in card_rows}
+            claim_rows = conn.execute(
+                "SELECT id, tailored_resume_id, evidence_card_ids_json FROM tailored_claims"
+            ).fetchall()
+        affected_claim_ids: list[int] = []
+        affected_tailored_ids: set[int] = set()
+        for row in claim_rows:
+            referenced_ids = {int(value) for value in json.loads(row["evidence_card_ids_json"])}
+            if card_ids.intersection(referenced_ids):
+                affected_claim_ids.append(int(row["id"]))
+                affected_tailored_ids.add(int(row["tailored_resume_id"]))
+        return {
+            "source_id": source_id,
+            "card_count": len(card_ids),
+            "claim_count": len(affected_claim_ids),
+            "tailored_resume_count": len(affected_tailored_ids),
+            "requires_cascade": bool(affected_claim_ids),
+        }
+
+    def delete_evidence_source(self, source_id: int, cascade: bool = False) -> dict[str, Any]:
+        impact = self.evidence_source_delete_impact(source_id)
+        if impact["requires_cascade"] and not cascade:
+            raise ValueError("该资料已被可信简历引用，请确认级联删除受影响的生成结果")
+        with self._connect() as conn:
+            card_rows = conn.execute("SELECT id FROM evidence_cards WHERE source_id = ?", (source_id,)).fetchall()
+            card_ids = {int(row["id"]) for row in card_rows}
+            affected_tailored_ids: set[int] = set()
+            if card_ids:
+                claim_rows = conn.execute(
+                    "SELECT tailored_resume_id, evidence_card_ids_json FROM tailored_claims"
+                ).fetchall()
+                for row in claim_rows:
+                    referenced_ids = {int(value) for value in json.loads(row["evidence_card_ids_json"])}
+                    if card_ids.intersection(referenced_ids):
+                        affected_tailored_ids.add(int(row["tailored_resume_id"]))
+            for tailored_resume_id in affected_tailored_ids:
+                conn.execute("DELETE FROM tailored_claims WHERE tailored_resume_id = ?", (tailored_resume_id,))
+                conn.execute("DELETE FROM tailored_resumes WHERE id = ?", (tailored_resume_id,))
+            conn.execute("DELETE FROM evidence_cards WHERE source_id = ?", (source_id,))
+            conn.execute("DELETE FROM evidence_sources WHERE id = ?", (source_id,))
+        return {**impact, "deleted": True, "cascade": cascade}
+
+    def create_evidence_card(self, card: EvidenceCard) -> EvidenceCard:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO evidence_cards (
+                    source_id, category, title, organization, time_range, situation,
+                    actions_json, results_json, skills_json, status, provenance_type,
+                    source_quote, source_start, source_end, quote_verified, user_note,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    card.source_id,
+                    card.category,
+                    card.title,
+                    card.organization,
+                    card.time_range,
+                    card.situation,
+                    json.dumps(card.actions, ensure_ascii=False),
+                    json.dumps(card.results, ensure_ascii=False),
+                    json.dumps(card.skills, ensure_ascii=False),
+                    card.status,
+                    card.provenance_type,
+                    card.source_quote,
+                    card.source_start,
+                    card.source_end,
+                    1 if card.quote_verified else 0,
+                    card.user_note,
+                    card.created_at.isoformat(),
+                    card.updated_at.isoformat(),
+                ),
+            )
+        return card.model_copy(update={"id": cursor.lastrowid})
+
+    def list_evidence_cards(
+        self,
+        source_id: int | None = None,
+        status: str | None = None,
+    ) -> list[EvidenceCard]:
+        clauses: list[str] = []
+        values: list[Any] = []
+        if source_id is not None:
+            clauses.append("source_id = ?")
+            values.append(source_id)
+        if status:
+            clauses.append("status = ?")
+            values.append(status)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as conn:
+            rows = conn.execute(f"SELECT * FROM evidence_cards{where} ORDER BY id DESC", values).fetchall()
+        return [self._evidence_card_from_row(row) for row in rows]
+
+    def get_evidence_card(self, card_id: int) -> EvidenceCard:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM evidence_cards WHERE id = ?", (card_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Evidence card {card_id} not found")
+        return self._evidence_card_from_row(row)
+
+    def update_evidence_card(self, card: EvidenceCard) -> EvidenceCard:
+        if card.id is None:
+            raise ValueError("Evidence card id is required")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE evidence_cards
+                SET category = ?, title = ?, organization = ?, time_range = ?, situation = ?,
+                    actions_json = ?, results_json = ?, skills_json = ?, status = ?,
+                    source_quote = ?, source_start = ?, source_end = ?, quote_verified = ?,
+                    user_note = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    card.category,
+                    card.title,
+                    card.organization,
+                    card.time_range,
+                    card.situation,
+                    json.dumps(card.actions, ensure_ascii=False),
+                    json.dumps(card.results, ensure_ascii=False),
+                    json.dumps(card.skills, ensure_ascii=False),
+                    card.status,
+                    card.source_quote,
+                    card.source_start,
+                    card.source_end,
+                    1 if card.quote_verified else 0,
+                    card.user_note,
+                    card.updated_at.isoformat(),
+                    card.id,
+                ),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"Evidence card {card.id} not found")
+        return self.get_evidence_card(card.id)
+
+    def delete_evidence_card(self, card_id: int) -> None:
+        with self._connect() as conn:
+            claim_rows = conn.execute("SELECT evidence_card_ids_json FROM tailored_claims").fetchall()
+            if any(card_id in json.loads(row["evidence_card_ids_json"]) for row in claim_rows):
+                raise ValueError("该经历卡片已被可信简历引用，不能单独删除")
+            cursor = conn.execute("DELETE FROM evidence_cards WHERE id = ?", (card_id,))
+        if cursor.rowcount == 0:
+            raise KeyError(f"Evidence card {card_id} not found")
+
+    def _evidence_source_from_row(self, row: sqlite3.Row) -> EvidenceSource:
+        return EvidenceSource(
+            id=row["id"],
+            filename=row["filename"],
+            file_type=row["file_type"],
+            raw_text=row["raw_text"],
+            extraction_status=row["extraction_status"],
+            extraction_method=row["extraction_method"],
+            extraction_confidence=float(row["extraction_confidence"]),
+            manual_text_required=bool(row["manual_text_required"]),
+            warnings=json.loads(row["warnings_json"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    def _evidence_card_from_row(self, row: sqlite3.Row) -> EvidenceCard:
+        return EvidenceCard(
+            id=row["id"],
+            source_id=row["source_id"],
+            category=row["category"],
+            title=row["title"],
+            organization=row["organization"],
+            time_range=row["time_range"],
+            situation=row["situation"],
+            actions=json.loads(row["actions_json"]),
+            results=json.loads(row["results_json"]),
+            skills=json.loads(row["skills_json"]),
+            status=row["status"],
+            provenance_type=row["provenance_type"],
+            source_quote=row["source_quote"],
+            source_start=row["source_start"],
+            source_end=row["source_end"],
+            quote_verified=bool(row["quote_verified"]),
+            user_note=row["user_note"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
     def create_search_run(self, run: SearchRun) -> SearchRun:
         with self._connect() as conn:
             cursor = conn.execute(
@@ -1144,6 +1438,120 @@ class SQLiteStore:
         if cursor.rowcount == 0:
             raise KeyError(f"Tailored resume {tailored_resume_id} not found")
         return self.get_tailored_resume_revision(tailored_resume_id)
+
+    def create_tailored_claim(self, claim: TailoredClaim) -> TailoredClaim:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO tailored_claims (
+                    tailored_resume_id, text, evidence_card_ids_json, support_status,
+                    user_decision, edit_version, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    claim.tailored_resume_id,
+                    claim.text,
+                    json.dumps(claim.evidence_card_ids, ensure_ascii=False),
+                    claim.support_status,
+                    claim.user_decision,
+                    claim.edit_version,
+                    claim.created_at.isoformat(),
+                    claim.updated_at.isoformat(),
+                ),
+            )
+        return claim.model_copy(update={"id": cursor.lastrowid})
+
+    def list_tailored_claims(self, tailored_resume_id: int) -> list[TailoredClaim]:
+        self.get_tailor_bundle(tailored_resume_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM tailored_claims WHERE tailored_resume_id = ? ORDER BY id",
+                (tailored_resume_id,),
+            ).fetchall()
+        return [self._tailored_claim_from_row(row) for row in rows]
+
+    def get_tailored_claim(self, claim_id: int) -> TailoredClaim:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM tailored_claims WHERE id = ?", (claim_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Tailored claim {claim_id} not found")
+        return self._tailored_claim_from_row(row)
+
+    def update_tailored_claim(self, claim: TailoredClaim) -> TailoredClaim:
+        if claim.id is None:
+            raise ValueError("Tailored claim id is required")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tailored_claims
+                SET text = ?, evidence_card_ids_json = ?, support_status = ?, user_decision = ?,
+                    edit_version = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    claim.text,
+                    json.dumps(claim.evidence_card_ids, ensure_ascii=False),
+                    claim.support_status,
+                    claim.user_decision,
+                    claim.edit_version,
+                    claim.updated_at.isoformat(),
+                    claim.id,
+                ),
+            )
+        if cursor.rowcount == 0:
+            raise KeyError(f"Tailored claim {claim.id} not found")
+        return self.get_tailored_claim(claim.id)
+
+    def finalize_trusted_tailor(self, tailored_resume_id: int, resume_rewrite: str) -> dict[str, Any]:
+        bundle = self.get_tailor_bundle(tailored_resume_id)
+        review = dict(bundle.get("review") or {})
+        review.update(
+            {
+                "truth_check_passed": True,
+                "trusted_evidence_finalized": True,
+                "summary": "所有保留内容均已关联确认经历并由用户接受",
+            }
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE tailored_resumes
+                SET resume_text = ?, resume_rewrite = ?, project_rewrite = ?,
+                    truth_check_passed = 1, review_json = ?
+                WHERE id = ?
+                """,
+                (
+                    resume_rewrite,
+                    resume_rewrite,
+                    resume_rewrite,
+                    json.dumps(review, ensure_ascii=False),
+                    tailored_resume_id,
+                ),
+            )
+        return {**self.get_tailor_bundle(tailored_resume_id), "claims": [claim.model_dump(mode="json") for claim in self.list_tailored_claims(tailored_resume_id)]}
+
+    def can_export_tailored_resume(self, tailored_resume_id: int) -> bool:
+        claims = self.list_tailored_claims(tailored_resume_id)
+        if not claims:
+            return True
+        included = [claim for claim in claims if claim.user_decision != "rejected"]
+        return bool(included) and all(
+            claim.support_status == "supported" and claim.user_decision == "accepted" for claim in included
+        )
+
+    def _tailored_claim_from_row(self, row: sqlite3.Row) -> TailoredClaim:
+        return TailoredClaim(
+            id=row["id"],
+            tailored_resume_id=row["tailored_resume_id"],
+            text=row["text"],
+            evidence_card_ids=json.loads(row["evidence_card_ids_json"]),
+            support_status=row["support_status"],
+            user_decision=row["user_decision"],
+            edit_version=row["edit_version"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
 
     def create_application(
         self,

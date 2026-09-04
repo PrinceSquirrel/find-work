@@ -8,7 +8,7 @@ from time import perf_counter
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from app.schemas import JobMatch, JobPosting, ModelConfig, ResumeDraft
+from app.schemas import EvidenceCard, EvidenceSource, JobMatch, JobPosting, ModelConfig, ResumeDraft
 from app.services.llm_prompt_service import LLMPromptService
 
 
@@ -113,6 +113,31 @@ class OpenAICompatibleClient:
         duration_ms = max(1, int((perf_counter() - started) * 1000))
         return self._parse_response(config, prompt, raw, duration_ms)
 
+    def generate_evidence_cards(
+        self,
+        config: ModelConfig,
+        source: EvidenceSource,
+    ) -> LLMCompletionResult:
+        return self._generate_json(
+            config,
+            system_message=self.prompt_service.evidence_card_system_message(),
+            prompt=self.prompt_service.evidence_card_user_prompt(source),
+            temperature=0,
+        )
+
+    def generate_evidence_tailor(
+        self,
+        config: ModelConfig,
+        job: JobPosting,
+        cards: list[EvidenceCard],
+    ) -> LLMCompletionResult:
+        return self._generate_json(
+            config,
+            system_message=self.prompt_service.evidence_tailor_system_message(),
+            prompt=self.prompt_service.evidence_tailor_user_prompt(job, cards),
+            temperature=0.1,
+        )
+
     def score_job_matches(
         self,
         config: ModelConfig,
@@ -164,6 +189,44 @@ class OpenAICompatibleClient:
             target = config.api_key_env_var or "saved API key"
             raise LLMClientUnavailable(f"API key is not configured: {target}")
         return api_key
+
+    def _generate_json(
+        self,
+        config: ModelConfig,
+        *,
+        system_message: str,
+        prompt: str,
+        temperature: float,
+    ) -> LLMCompletionResult:
+        api_key = self._api_key(config)
+        payload = {
+            "model": config.model,
+            "messages": [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+        }
+        request = Request(
+            f"{config.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "agent-business/0.1",
+            },
+            method="POST",
+        )
+        started = perf_counter()
+        try:
+            with urlopen(request, timeout=config.timeout_ms / 1000) as response:
+                raw = response.read().decode("utf-8")
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            raise LLMClientUnavailable(f"LLM request failed: {exc.__class__.__name__}") from exc
+        duration_ms = max(1, int((perf_counter() - started) * 1000))
+        return self._parse_response(config, prompt, raw, duration_ms)
 
     def _parse_response(
         self,

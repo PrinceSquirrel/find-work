@@ -81,6 +81,61 @@ class TailoredResume(BaseModel):
     created_at: datetime = Field(default_factory=now_utc)
 
 
+class EvidenceSource(BaseModel):
+    id: int | None = None
+    filename: str
+    file_type: str
+    raw_text: str = ""
+    extraction_status: str = "pending"
+    extraction_method: str = ""
+    extraction_confidence: float = 0.0
+    manual_text_required: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=now_utc)
+    updated_at: datetime = Field(default_factory=now_utc)
+
+
+class EvidenceCard(BaseModel):
+    id: int | None = None
+    source_id: int | None = None
+    category: str = "other"
+    title: str
+    organization: str = ""
+    time_range: str = ""
+    situation: str = ""
+    actions: list[str] = Field(default_factory=list)
+    results: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    status: str = "draft"
+    provenance_type: str = "document"
+    source_quote: str = ""
+    source_start: int | None = None
+    source_end: int | None = None
+    quote_verified: bool = False
+    user_note: str = ""
+    created_at: datetime = Field(default_factory=now_utc)
+    updated_at: datetime = Field(default_factory=now_utc)
+
+
+class EvidenceRecommendation(BaseModel):
+    card: EvidenceCard
+    score: int
+    hit_reasons: list[str] = Field(default_factory=list)
+    jd_requirements: list[str] = Field(default_factory=list)
+
+
+class TailoredClaim(BaseModel):
+    id: int | None = None
+    tailored_resume_id: int
+    text: str
+    evidence_card_ids: list[int] = Field(default_factory=list)
+    support_status: str = "supported"
+    user_decision: str = "pending"
+    edit_version: int = 0
+    created_at: datetime = Field(default_factory=now_utc)
+    updated_at: datetime = Field(default_factory=now_utc)
+
+
 class GreetingMessage(BaseModel):
     id: int | None = None
     job_id: int
@@ -440,6 +495,48 @@ class SearchRunRequest(BaseModel):
 
 class TailorRequest(BaseModel):
     resume_id: int
+
+
+class EvidenceSourceManualTextRequest(BaseModel):
+    raw_text: str
+
+
+class EvidenceCardCreate(BaseModel):
+    category: str = "other"
+    title: str
+    organization: str = ""
+    time_range: str = ""
+    situation: str = ""
+    actions: list[str] = Field(default_factory=list)
+    results: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    user_note: str = ""
+
+
+class EvidenceCardUpdate(BaseModel):
+    category: str | None = None
+    title: str | None = None
+    organization: str | None = None
+    time_range: str | None = None
+    situation: str | None = None
+    actions: list[str] | None = None
+    results: list[str] | None = None
+    skills: list[str] | None = None
+    status: str | None = None
+    source_quote: str | None = None
+    user_note: str | None = None
+
+
+class EvidenceTailorRequest(BaseModel):
+    resume_id: int
+    evidence_card_ids: list[int] = Field(default_factory=list)
+
+
+class TailoredClaimUpdate(BaseModel):
+    text: str | None = None
+    evidence_card_ids: list[int] | None = None
+    user_decision: str | None = None
+    confirm_support: bool = False
 
 
 class ApplyRecordRequest(BaseModel):
