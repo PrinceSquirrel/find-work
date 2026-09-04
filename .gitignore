@@ -31,9 +31,12 @@ coverage/
 data/*.sqlite3
 data/*.sqlite3-*
 data/*.db
+data/*.pid
 data/uploads/
 uploads/
 *.log
+.playwright-cli/
+output/playwright/
 
 # Worktrees and local scratch
 worktrees/
