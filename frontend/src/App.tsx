@@ -29,6 +29,13 @@ import {
 } from "./lib/dashboard";
 import type { SystemHealthOperationFeedback } from "./lib/dashboard";
 import {
+  formatMaterialSize,
+  getMaterialFormatGroup,
+  MATERIAL_FORMAT_GROUPS,
+  MATERIAL_UPLOAD_ACCEPT,
+  MATERIAL_WORKBENCH_TOOLS,
+} from "./lib/materials";
+import {
   filterHomeFeatures,
   getWorkspaceModule,
   WORKSPACE_NAV_ITEMS,
@@ -1846,10 +1853,22 @@ function App() {
             </section>
           </>
         ) : (
-          <header className="workspace-page-heading">
-            <p className="eyebrow">Squirrel World · Workspace</p>
-            <h1>{activeModuleMeta.label}</h1>
-            <p>{activeModuleMeta.description}</p>
+          <header className={`workspace-page-heading ${activeModule === "materials" ? "materials-hero" : ""}`}>
+            <div className="workspace-page-heading-copy">
+              <p className="eyebrow">Squirrel World · Workspace</p>
+              <h1>{activeModuleMeta.label}</h1>
+              <p>{activeModuleMeta.description}</p>
+              {activeModule === "materials" ? (
+                <div className="materials-hero-badges" aria-label="资料工作台能力">
+                  <span>本地优先</span>
+                  <span>多格式入口</span>
+                  <span>可追溯处理</span>
+                </div>
+              ) : null}
+            </div>
+            {activeModule === "materials" ? (
+              <img src="/squirrel-world-emblem.svg" alt="松鼠世界资料工作台" />
+            ) : null}
           </header>
         )}
 
@@ -1862,6 +1881,121 @@ function App() {
           </button>
         </div>
       ) : null}
+
+      <section className="material-workbench module-panel module-materials" aria-label="松鼠世界资料工作台">
+        <div className="material-tool-grid">
+          {MATERIAL_WORKBENCH_TOOLS.map((tool) => (
+            <article className={`material-tool-card status-${tool.status}`} key={tool.id}>
+              <div className="material-tool-icon" aria-hidden="true">{tool.icon}</div>
+              <div>
+                <span>{tool.eyebrow}</span>
+                <h2>{tool.title}</h2>
+                <p>{tool.description}</p>
+              </div>
+              <small>{tool.status === "frontend-ready" ? "前端入口已完成" : "下一阶段接入"}</small>
+            </article>
+          ))}
+        </div>
+
+        <div className="material-workspace-grid">
+          <article className="material-upload-panel">
+            <header>
+              <div>
+                <span>COLLECT · LOCAL FIRST</span>
+                <h2>把资料放进松鼠树屋</h2>
+              </div>
+              <i>{evidenceFiles.length ? `${evidenceFiles.length} 个待处理` : "等待选择"}</i>
+            </header>
+            <label className="material-drop-zone">
+              <input
+                type="file"
+                multiple
+                accept={MATERIAL_UPLOAD_ACCEPT}
+                onChange={(event) => {
+                  setEvidenceFiles(Array.from(event.target.files ?? []));
+                  setEvidenceMessage(null);
+                }}
+              />
+              <span className="material-drop-icon" aria-hidden="true">＋</span>
+              <strong>选择文件或拖放到这里</strong>
+              <small>WPS 文档、图片、PDF、ZIP / 7Z / 7P、HTML、Python、音频与视频均已列入前端接入范围。</small>
+            </label>
+
+            {evidenceFiles.length ? (
+              <div className="material-selection-list" aria-label="已选择资料">
+                {evidenceFiles.slice(0, 6).map((file) => {
+                  const group = getMaterialFormatGroup(file.name);
+                  return (
+                    <div key={`${file.name}-${file.lastModified}`}>
+                      <span>{group?.icon ?? "?"}</span>
+                      <p><b>{file.name}</b><small>{group?.label ?? "待识别格式"} · {formatMaterialSize(file.size)}</small></p>
+                      <i>待接入</i>
+                    </div>
+                  );
+                })}
+                {evidenceFiles.length > 6 ? <small>另有 {evidenceFiles.length - 6} 个文件已折叠</small> : null}
+              </div>
+            ) : (
+              <div className="material-empty-note">
+                <b>前端页面阶段</b>
+                <span>本轮只完成选择、分类与处理路线展示，不会把文件发送到尚未完成的解析服务。</span>
+              </div>
+            )}
+
+            <div className="material-upload-actions">
+              <button
+                className="primary"
+                type="button"
+                disabled={!evidenceFiles.length}
+                onClick={() => setEvidenceMessage(`已把 ${evidenceFiles.length} 个文件加入前端待处理队列；后端接入将在下一阶段实施。`)}
+              >
+                加入前端待处理队列
+              </button>
+              <button type="button" disabled={!evidenceFiles.length} onClick={() => { setEvidenceFiles([]); setEvidenceMessage(null); }}>
+                清空选择
+              </button>
+            </div>
+            {evidenceMessage ? <p className="material-feedback" role="status">{evidenceMessage}</p> : null}
+          </article>
+
+          <aside className="material-route-panel">
+            <header>
+              <span>PROCESS ROUTE</span>
+              <h2>资料处理路线</h2>
+              <p>根据文件类型自动进入对应处理模块，所有能力保持同一套可追溯状态。</p>
+            </header>
+            <ol>
+              <li className="active"><i>01</i><div><b>安全接收</b><span>格式、大小与风险检查</span></div></li>
+              <li><i>02</i><div><b>内容预览</b><span>文档、代码、媒体统一查看</span></div></li>
+              <li><i>03</i><div><b>识别与编辑</b><span>OCR 文本或 WPS 在线编辑</span></div></li>
+              <li><i>04</i><div><b>归档与引用</b><span>保留版本、来源和处理记录</span></div></li>
+            </ol>
+            <div className="material-route-summary">
+              <div><span>本地资料</span><b>{evidenceSources.length}</b></div>
+              <div><span>前端待处理</span><b>{evidenceFiles.length}</b></div>
+            </div>
+          </aside>
+        </div>
+
+        <section className="material-format-board" aria-labelledby="material-format-title">
+          <header>
+            <div>
+              <span>FORMAT MAP</span>
+              <h2 id="material-format-title">支持格式地图</h2>
+            </div>
+            <small>共 {MATERIAL_FORMAT_GROUPS.reduce((total, group) => total + group.extensions.length, 0)} 个扩展名入口</small>
+          </header>
+          <div className="material-format-grid">
+            {MATERIAL_FORMAT_GROUPS.map((group) => (
+              <article key={group.id}>
+                <span className="material-format-icon" aria-hidden="true">{group.icon}</span>
+                <div><b>{group.label}</b><small>{group.description}</small></div>
+                <p>{group.extensions.map((extension) => <i key={extension}>.{extension}</i>)}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      </section>
 
       <Panel title="系统状态" kicker="System Health" className="module-panel module-dashboard module-settings health-panel">
         <div className={`system-health-headline tone-${systemHealthSummary.tone}`}>
@@ -1925,7 +2059,7 @@ function App() {
 
       <section className="workspace-grid">
         <div className="stack">
-          <Panel title="简历上传" kicker="Resume Intake" className="module-panel module-materials resume-panel">
+          <Panel title="简历上传" kicker="Resume Intake" className="module-panel resume-panel legacy-material-panel">
             <form className="upload-form" onSubmit={handleUpload}>
               <label className="file-drop">
                 <input
@@ -2450,7 +2584,7 @@ function App() {
       </section>
 
       <section className="evidence-lab" aria-label="可信经历资料库">
-        <Panel title="可信经历资料库" kicker="Evidence Vault" className="module-panel module-materials evidence-library-panel">
+        <Panel title="可信经历资料库" kicker="Evidence Vault" className="module-panel evidence-library-panel legacy-material-panel">
           <div className="evidence-manifesto">
             <div>
               <span>01 / COLLECT</span>

@@ -23,7 +23,7 @@ export type HomeFeature = {
 
 export const WORKSPACE_NAV_ITEMS: WorkspaceNavItem[] = [
   { id: "dashboard", label: "仪表盘", shortLabel: "首页", description: "Token、费用与系统概览" },
-  { id: "materials", label: "简历与资料", shortLabel: "资料", description: "简历、经历卡片与证据" },
+  { id: "materials", label: "资料工作台", shortLabel: "资料", description: "上传、预览、识别与编辑" },
   { id: "jobs", label: "岗位雷达", shortLabel: "岗位", description: "搜索、筛选与详情核验" },
   { id: "studio", label: "生成中心", shortLabel: "生成", description: "可信生成与人审材料" },
   { id: "applications", label: "投递跟踪", shortLabel: "投递", description: "投递漏斗与结果同步" },
@@ -34,9 +34,9 @@ export const WORKSPACE_NAV_ITEMS: WorkspaceNavItem[] = [
 export const HOME_FEATURES: HomeFeature[] = [
   {
     module: "materials",
-    title: "可信资料库",
-    description: "沉淀简历、经历卡片与可追溯证据",
-    keywords: ["简历", "经历", "资料", "证据"],
+    title: "资料工作台",
+    description: "统一上传 WPS、图片、源码与音视频资料",
+    keywords: ["简历", "经历", "资料", "上传", "WPS", "OCR", "预览"],
   },
   {
     module: "jobs",
@@ -60,7 +60,7 @@ export const HOME_FEATURES: HomeFeature[] = [
 
 export const WORKSPACE_PANEL_TITLES: Record<WorkspaceModule, string[]> = {
   dashboard: ["Token 消费", "系统状态"],
-  materials: ["简历上传", "可信经历资料库"],
+  materials: ["资料上传", "在线预览", "OCR 识别", "WPS 在线编辑"],
   jobs: ["搜索任务", "岗位筛选表"],
   studio: ["按 JD 可信生成", "人审材料"],
   applications: ["求职进度漏斗", "投递结果表", "转化统计"],
