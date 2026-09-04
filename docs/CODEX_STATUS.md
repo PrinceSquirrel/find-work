@@ -2723,3 +2723,38 @@ Updated: 2026-07-03 Asia/Shanghai
 - 等待用户确认发送两张截图；确认后先修改独立 Demo，包括移走截图圈选区域、导航悬停显隐、组件悬停高亮、首页搜索栏和产品功能简介。
 - Demo 修改需新增自动化测试、浏览器验收、提交并推送；随后再将确认后的设计迁移到完整 React 项目。
 - 正式项目迁移完成后必须运行后端全量测试、前端全量测试、静态检查、生产构建和浏览器响应式验证，全部通过后才能最终交付。
+
+## 2026-09-04：新版交互 Demo（complete）
+
+### 本阶段完成
+
+- 仪表盘移除“最近动作”和“求职进度漏斗”，分别归入“Agent 运行”和“投递跟踪”。
+- 顶部常驻工具条收进左侧导航；桌面端导航默认保留 14px 引导把手，鼠标靠近或键盘聚焦时展开，点击后移开鼠标会自动收起。
+- 首页新增功能搜索、产品能力简介和四个模块快捷入口；卡片、状态块和模块入口均有悬停高亮。
+- 手机端改为固定底部导航，390px 视口无横向溢出。
+- 提交 `686c31e` 已推送到 `origin/codex/resume-model-ops-stage`，远程 HEAD 与本地一致。
+
+### 修改文件
+
+- `outputs/squirrel-world-ui-demo-20260903/index.html`
+- `outputs/squirrel-world-ui-demo-20260903/dashboard-preview.png`
+- `outputs/squirrel-world-ui-demo-20260903/mobile-preview.png`
+- `outputs/squirrel-world-logo-20260903/squirrel-world-logo-v2-emblem.svg`
+- `backend/tests/test_dashboard_demo.py`
+
+### 启动与浏览器效果
+
+- 在 `outputs` 目录执行 `python -m http.server 4175 --bind 127.0.0.1`，打开 `http://127.0.0.1:4175/squirrel-world-ui-demo-20260903/`。
+- 桌面端左侧只显示绿色引导边和橙色把手，鼠标靠近后显示完整品牌、导航、主题、通知和用户信息；手机端显示底部模块导航。
+
+### 验证结果
+
+- Demo 结构测试：`3 passed`。
+- 后端全量：`107 passed`，仅有 reportlab 的 Python 3.14 deprecation warning。
+- 前端全量：`44 passed`；`npm run lint` 与 `npm run build` 通过。
+- Playwright：桌面导航展开/收起、搜索过滤、模块归位、组件悬停、390px 响应式均通过；控制台 `0 errors, 0 warnings`。
+
+### 剩余事项 / 下一步
+
+- 将已验证的品牌、导航、首页搜索、模块归类和悬停设计迁移到正式 React 页面，并接入现有真实数据与操作。
+- 正式页面迁移后重新执行全量测试、构建、静态检查和浏览器验收，再提交并推送。
