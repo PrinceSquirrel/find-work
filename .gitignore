@@ -37,6 +37,8 @@ uploads/
 *.log
 .playwright-cli/
 output/playwright/
+outputs/trusted-evidence-portfolio-*/_work/
+*.inspect.ndjson
 
 # Worktrees and local scratch
 worktrees/
