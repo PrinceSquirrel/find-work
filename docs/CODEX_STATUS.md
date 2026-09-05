@@ -3203,3 +3203,44 @@ Updated: 2026-07-03 Asia/Shanghai
 - 在线预览、OCR、WPS 编辑、真实上传和资料库归档仍未实现，严格按 `docs/MATERIAL_WORKSPACE_PLAN.md` 后续分阶段开发。
 - `.7p` 已按需求保留为前端入口；接入解压前必须确认其真实格式或是否为 `.7z` 别名。
 - WPS 编辑实现前需要确定使用本机 WPS 客户端还是 WPS 开放平台网页编辑，并准备相应授权配置。
+
+## 2026-09-05：投递跟踪主题、筛选与分页前端（complete）
+
+### 本阶段完成
+
+- 投递跟踪页头复用松鼠世界森林主题横幅与 Logo，进度区域采用等高种子卡片、暖色序号和当前状态数量。
+- 结果表改为全宽，新增岗位、关键词、地址三个等宽筛选条件；长备注可展开查看，保留现有状态修改和只读同步入口。
+- 新增每页 25/50/100 条选择器、总记录数与翻页入口。当前是前端预览，筛选和翻页按钮禁用，选择条数不会裁切真实数据。
+- 统计区拆分为等宽、等高的“转化统计”和“投递时段观察”，仍使用原有全量统计数据。
+- 计划写入 `docs/APPLICATION_TRACKING_PLAN.md`：补齐地点数据、组合筛选、服务端分页、统计口径联动及验收样例。
+
+### 修改文件与阶段
+
+- 页面阶段（5 个文件）：`frontend/src/App.tsx`、`frontend/src/styles.css`、`frontend/src/ApplicationTrackingControls.tsx`、`frontend/src/ApplicationTrackingControls.test.tsx`、`frontend/src/lib/workspace.ts`。
+- 文档阶段（3 个文件）：`README.md`、`docs/APPLICATION_TRACKING_PLAN.md`、`docs/CODEX_STATUS.md`。
+- 页面提交 `fd96187379f72f2b17da26c14597ff6e49ac88e2` 已推送到 `origin/codex/resume-model-ops-stage`，远端与本地核对一致。
+- 计划文档通过提交信息 `docs: plan application tracking filters and pagination` 跟踪；最终同步状态以该提交的远端核对为准。
+
+### 如何启动与浏览器效果
+
+- 根目录执行 `.\scripts\start-project.ps1 -SkipInstall`，打开 `http://127.0.0.1:5173/`，点击“投递跟踪”。
+- 从上到下为森林主题横幅、七个进度卡、带筛选栏与分页区的结果表、两张统计卡。
+- 筛选框可输入和重置，条数可选择；页面明确提示这些控件暂未作用于记录。既有数据继续显示，不伪造筛选结果或页数。
+- 桌面侧栏持续显示；移动端保持固定底部导航；窄屏筛选框与统计区改为单列。
+
+### 验证结果
+
+- 后端全量：`119 passed`，仅有既有 reportlab 弃用警告。
+- 前端全量：`56 passed`（新增 4 项控件渲染测试）；模块元数据调整后相关 5 项导航测试再次通过。
+- `npm run lint`、`npm run build`、`git diff --check` 通过。
+- Playwright 桌面 `1600×1000`：三个筛选框均为 `390px` 宽；七个进度卡均为 `134px` 高；两张统计卡均为 `638px` 宽、约 `451px` 高，顶部与底部一致。
+- Playwright `1280px`、`768px`、`390px`：页面横向滚动宽度与视口一致；768px 筛选框改为单列 `384px` 宽；390px 底部导航固定到视口底部。
+- 操作验证：三字段填写与重置、回车不跳转、25/50/100 切换、备注展开/收起均通过；现有 6 条记录未因预览控件变化。
+- 资料工作台品牌横幅回归检查通过；浏览器控制台 `0 errors, 0 warnings`。
+- 本地预览图：`output/playwright/tracking-desktop.png`、`tracking-mobile-top.png`、`tracking-mobile-filters.png`、`tracking-mobile-pagination.png`（不作为源码提交）。
+
+### 剩余事项
+
+- 本轮前端范围完成；新增筛选、实际分页及筛选后的统计联动待用户后续要求时一起实现。
+- 当前投递接口没有地址字段，需要先关联并保留可靠岗位地点信息，不能从公司名称猜测地址。
+- 原有两个未跟踪文件保持原样，未加入本次提交。
