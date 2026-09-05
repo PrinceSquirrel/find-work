@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import { ApplicationFilterPreview, ApplicationPaginationPreview } from "./ApplicationTrackingControls";
 import { api, getTailorBlockedMessage } from "./lib/api";
 import {
   buildAgentStatusRows,
@@ -1853,11 +1854,11 @@ function App() {
             </section>
           </>
         ) : (
-          <header className={`workspace-page-heading ${activeModule === "materials" ? "materials-hero" : ""}`}>
+          <header className={`workspace-page-heading ${activeModule === "materials" || activeModule === "applications" ? "workspace-brand-hero" : ""}`}>
             <div className="workspace-page-heading-copy">
               <p className="eyebrow">Squirrel World · Workspace</p>
               <h1>{activeModuleMeta.label}</h1>
-              <p>{activeModuleMeta.description}</p>
+              <p>{activeModule === "applications" ? "让每一次出发，都有迹可循。收藏机会，跟进回应，走向下一站。" : activeModuleMeta.description}</p>
               {activeModule === "materials" ? (
                 <div className="materials-hero-badges" aria-label="资料工作台能力">
                   <span>本地优先</span>
@@ -1865,9 +1866,16 @@ function App() {
                   <span>可追溯处理</span>
                 </div>
               ) : null}
+              {activeModule === "applications" ? (
+                <div className="materials-hero-badges" aria-label="投递跟踪概览">
+                  <span>投递足迹</span>
+                  <span>进度一览</span>
+                  <span>回应洞察</span>
+                </div>
+              ) : null}
             </div>
-            {activeModule === "materials" ? (
-              <img src="/squirrel-world-emblem.svg" alt="松鼠世界资料工作台" />
+            {activeModule === "materials" || activeModule === "applications" ? (
+              <img src="/squirrel-world-emblem.svg" alt={`松鼠世界${activeModuleMeta.label}`} />
             ) : null}
           </header>
         )}
@@ -2444,16 +2452,18 @@ function App() {
         </div>
 
         <Panel title="求职进度漏斗" kicker="Application Journey" className="module-panel module-applications pipeline-panel">
+          <p className="tracking-pipeline-caption">每一份投递，都是一颗等待发芽的种子。<span>按当前状态分布</span></p>
           {busy.boot ? (
             <LoadingRows count={7} />
           ) : applications.length ? (
             <div className="pipeline-grid">
-              {STATUS_COLUMNS.map((status) => {
+              {STATUS_COLUMNS.map((status, index) => {
                 const count = applications.filter((item) => item.current_status === status).length;
                 return (
                   <div className={`pipeline-card tone-${getStatusTone(status)}`} key={status}>
-                    <span>{STATUS_LABELS[status]}</span>
+                    <span><i aria-hidden="true">{String(index + 1).padStart(2, "0")}</i>{STATUS_LABELS[status]}</span>
                     <b>{count}</b>
+                    <small>份投递</small>
                   </div>
                 );
               })}
@@ -3245,6 +3255,7 @@ function App() {
 
       <section className="analytics-layout">
         <Panel title="投递结果表" kicker="Applications" className="module-panel module-applications applications-panel">
+          <ApplicationFilterPreview />
           <div className="sync-console">
             <div>
               <b>投递状态只读同步</b>
@@ -3354,10 +3365,16 @@ function App() {
                           </a>
                         ) : null}
                       </div>
-                      <p>{platformConfirmation.note || "暂无备注"}</p>
+                      {platformConfirmation.note ? (
+                        <details className="application-note">
+                          <summary>查看备注</summary>
+                          <p>{platformConfirmation.note}</p>
+                        </details>
+                      ) : <p>暂无备注</p>}
                     </div>
                     <div className="status-editor">
                       <select
+                        aria-label={`${application.title}的下一状态`}
                         value={statusDrafts[application.id] ?? ""}
                         disabled={nextStatuses.length === 0}
                         onChange={(event) =>
@@ -3375,6 +3392,7 @@ function App() {
                         ))}
                       </select>
                       <input
+                        aria-label={`${application.title}的状态备注`}
                         value={statusNotes[application.id] ?? ""}
                         onChange={(event) =>
                           setStatusNotes((current) => ({
@@ -3406,16 +3424,22 @@ function App() {
           ) : (
             <EmptyState title="暂无投递结果" text="确认投递后会记录平台、职位、当前状态和状态事件。" />
           )}
+          <ApplicationPaginationPreview count={applications.length} loading={busy.boot} />
         </Panel>
 
         <Panel title="转化统计" kicker="Read / Reply / Progress" className="module-panel module-applications conversion-panel">
+          <p className="tracking-insight-caption">从已读到回复，看看机会在哪里生长。<span>全部投递记录</span></p>
           <div className="rate-summary">
             <RateCard title="已读率" bucket={analytics?.totals} rateKey="read_rate" countKey="read" />
             <RateCard title="回复率" bucket={analytics?.totals} rateKey="reply_rate" countKey="replied" />
             <RateCard title="推进率" bucket={analytics?.totals} rateKey="progress_rate" countKey="progressed" />
           </div>
-          <RateChart title="按小时段" buckets={analytics?.hourly ?? {}} />
           <RateChart title="按平台" buckets={analytics?.platform ?? {}} labelMap={PLATFORM_LABELS} />
+        </Panel>
+        <Panel title="投递时段观察" kicker="The Rhythm of Opportunity" className="module-panel module-applications timing-panel">
+          <p className="tracking-insight-caption">回看不同时段的回应，寻找自己的投递节奏。<span>全部投递记录</span></p>
+          <RateChart title="按小时段" buckets={analytics?.hourly ?? {}} />
+          <p className="tracking-insight-note">时段统计用于回顾，不代表下一次投递的回复概率。</p>
         </Panel>
       </section>
       {detailJob ? (

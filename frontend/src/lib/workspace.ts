@@ -63,7 +63,7 @@ export const WORKSPACE_PANEL_TITLES: Record<WorkspaceModule, string[]> = {
   materials: ["资料上传", "在线预览", "OCR 识别", "WPS 在线编辑"],
   jobs: ["搜索任务", "岗位筛选表"],
   studio: ["按 JD 可信生成", "人审材料"],
-  applications: ["求职进度漏斗", "投递结果表", "转化统计"],
+  applications: ["求职进度漏斗", "投递结果表", "转化统计", "投递时段观察"],
   agents: ["Agent 状态", "最近动作"],
   settings: ["系统状态", "模型 / API"],
 };
