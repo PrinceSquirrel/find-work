@@ -3244,3 +3244,36 @@ Updated: 2026-07-03 Asia/Shanghai
 - 本轮前端范围完成；新增筛选、实际分页及筛选后的统计联动待用户后续要求时一起实现。
 - 当前投递接口没有地址字段，需要先关联并保留可靠岗位地点信息，不能从公司名称猜测地址。
 - 原有两个未跟踪文件保持原样，未加入本次提交。
+
+## 2026-09-08：六模块桌面一屏与生成中心评估
+
+状态：本轮页面调整与产品建议 complete；后续业务合并、资料处理服务和投递筛选分页仍未实施。
+
+### 完成内容
+
+- 移除 Agent 运行导航及用户页面，不删除后台 Agent 执行、事件接口和用量统计。
+- 六个页面采用森林主题标题与松鼠标识；桌面主框架固定在一屏内，侧栏常驻，长记录/展开详情在卡片内部滚动。不是把任意数量记录同时挤进一屏，也不限制小屏自然滚动。
+- 投递跟踪左侧结果区固定筛选与分页栏，右侧两张统计卡上下等高；仪表盘成本与健康卡保持等高。
+- 岗位、生成、设置的左右面板对齐并填满剩余高度；资料区分为工具入口、上传/处理路线、格式地图。
+- 生成中心补上选岗/资料跳转及现状说明，修正“下方岗位池”的过时提示。完整业务精简建议写入 STUDIO_SIMPLIFICATION_PLAN.md，尚未合并两套生成结果。
+
+### 文件、提交与同步
+
+- 页面阶段 5 文件：frontend/src/App.tsx、frontend/src/styles.css、frontend/src/lib/workspace.ts、frontend/src/lib/workspace.test.ts、scripts/check-workspace-viewport.js。
+- 页面提交 e0d5fe774f2be916f0df7548d82948e6c8590b85 已推送 origin/codex/resume-model-ops-stage；ls-remote 与本地 HEAD 一致。
+- 文档阶段 4 文件：README.md、docs/APPLICATION_TRACKING_PLAN.md、docs/STUDIO_SIMPLIFICATION_PLAN.md、docs/CODEX_STATUS.md。提交信息为 docs: record compact workspace verification and studio roadmap；最终远端校验在提交后执行。
+- 原有两个未跟踪用户文件未编辑、未暂存。
+
+### 验证与启动
+
+- 后端全量 pytest：119 passed，1 个既有 reportlab 弃用警告。
+- 前端全量 Vitest：56 passed；npm run lint、npm run build、git diff --check 通过。
+- 新浏览器布局回归：六页 × 1600×900 / 1280×720，共 12 项通过，校验无整页溢出、无模块重叠、无 Agent 导航、投递分页在屏内。使用本地现有数据，无模型/真实平台写操作。
+- 已检查本地浏览器页面截图；小高度下超长表单保留卡片内滚动，状态卡可悬停查看完整摘要与下一步。
+- 启动：根目录运行 .\scripts\start-project.ps1 -SkipInstall，访问 http://127.0.0.1:5173/。
+- 浏览器回归命令记录在 README.md；源码测试位于 scripts/check-workspace-viewport.js。
+
+### 剩余事项
+
+- 资料服务、OCR/WPS、真实筛选/分页按既有计划后续实现。
+- 生成中心建议统一为“选岗—选资料—生成—同一结果审核导出”；必须先接通事实确认，保留证据引用与定稿门禁，未经确认不重构后台。
