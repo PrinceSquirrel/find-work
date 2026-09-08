@@ -3286,3 +3286,9 @@ Updated: 2026-07-03 Asia/Shanghai
 - 第一阶段验证：后端 119、前端 56 项测试通过，lint/build 通过；两种尺寸的恢复布局及其他四页布局回归通过。提交信息 fix: restore dashboard and materials original layouts，随后立即推送核对。
 - 接下来：在不重排资料工作台的前提下接入真实资料确认，再统一生成与审核结果。后台真实性与定稿门禁不降低。
 - 仓库已有两个无关未跟踪文件保持不变，不加入提交。
+
+### 资料接通阶段
+
+- 保留资料工作台布局，通过原生模态弹窗接回已有上传、正文检查、候选提取和事实确认流程。
+- DOCX/PDF/TXT/MD/PNG/JPG/JPEG 接入真实接口；其他格式保持选择但明确未上传。逐文件报告失败，成功文件不留在重试队列；扫描件仍要求检查解析状态。
+- 使用已有后端，不新增模型自动调用。新增批上传单元测试；全量测试与构建通过后以 feat: connect evidence intake without redesigning materials 提交同步。

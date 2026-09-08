@@ -3968,6 +3968,20 @@ button.danger-quiet {
   }
 }
 
+.evidence-dialog {
+  width: min(1100px, calc(100vw - 48px));
+  max-height: 88dvh;
+  padding: 20px;
+  color: var(--green-deep);
+  background: #fffaf0;
+  border: 1px solid #8bb5a5;
+  border-radius: 22px;
+}
+.evidence-dialog::backdrop { background: rgba(10, 43, 35, .55); }
+.evidence-dialog .evidence-library-panel { height: auto !important; overflow: visible !important; }
+.evidence-dialog-close { position: sticky; top: 0; z-index: 2; margin-bottom: 12px; }
+.evidence-dialog .evidence-message { white-space: pre-line; }
+
 /* Desktop workspaces keep their frame on screen; long records scroll inside panels. */
 @media (min-width: 1101px) and (min-height: 600px) {
   .squirrel-app:not([data-active-module="dashboard"]):not([data-active-module="materials"]):not([data-active-module="applications"]) .app-shell {

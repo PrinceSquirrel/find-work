@@ -1,7 +1,8 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApplicationFilterPreview, ApplicationPaginationPreview } from "./ApplicationTrackingControls";
 import { api, getTailorBlockedMessage } from "./lib/api";
+import { uploadEvidenceBatch } from "./lib/evidenceUpload";
 import {
   buildAgentStatusRows,
   buildAgentStatusRowsFromEvents,
@@ -343,6 +344,8 @@ function App() {
   const [manualEvidenceDraft, setManualEvidenceDraft] = useState<EvidenceCardDraft>(emptyEvidenceCardDraft);
   const [evidenceRecommendations, setEvidenceRecommendations] = useState<EvidenceRecommendation[]>([]);
   const [selectedEvidenceCardIds, setSelectedEvidenceCardIds] = useState<number[]>([]);
+  const evidenceDialog = useRef<HTMLDialogElement>(null);
+  const evidenceUploadLock = useRef(false);
   const [trustedTailor, setTrustedTailor] = useState<TrustedTailorBundle | null>(null);
   const [trustedClaimDrafts, setTrustedClaimDrafts] = useState<Record<number, string>>({});
   const [evidenceMessage, setEvidenceMessage] = useState<string | null>(null);
@@ -1416,25 +1419,26 @@ function App() {
     setEvidenceCardDrafts(Object.fromEntries(nextCards.map((card) => [card.id, evidenceCardToDraft(card)])));
   }
 
-  async function handleEvidenceUpload(event: FormEvent) {
-    event.preventDefault();
+  async function handleEvidenceUpload(event?: FormEvent) {
+    event?.preventDefault();
+    if (evidenceUploadLock.current) return;
     if (!evidenceFiles.length) {
       setError("请先选择至少一个个人资料文件。");
       return;
     }
+    evidenceUploadLock.current = true;
     setBusy((current) => ({ ...current, evidenceUpload: true }));
     setError(null);
     setEvidenceMessage(null);
     try {
-      for (const file of evidenceFiles) {
-        await api.uploadEvidenceSource(file);
-      }
+      const result = await uploadEvidenceBatch(evidenceFiles, api.uploadEvidenceSource);
+      setEvidenceFiles(result.remaining);
+      setEvidenceMessage(result.messages.join("\n"));
       await refreshEvidenceLibrary();
-      setEvidenceFiles([]);
-      setEvidenceMessage(`已上传 ${evidenceFiles.length} 份资料。请先检查解析结果，再提取候选卡片。`);
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
+      evidenceUploadLock.current = false;
       setBusy((current) => ({ ...current, evidenceUpload: false }));
     }
   }
@@ -1941,8 +1945,8 @@ function App() {
               </div>
             ) : (
               <div className="material-empty-note">
-                <b>前端页面阶段</b>
-                <span>本轮只完成选择、分类与处理路线展示，不会把文件发送到尚未完成的解析服务。</span>
+                <b>资料接入</b>
+                <span>DOCX、PDF、TXT、MD 与图片可上传检查；扫描件可补全文本，其他格式尚未接入解析。</span>
               </div>
             )}
 
@@ -1950,14 +1954,15 @@ function App() {
               <button
                 className="primary"
                 type="button"
-                disabled={!evidenceFiles.length}
-                onClick={() => setEvidenceMessage(`已把 ${evidenceFiles.length} 个文件加入前端待处理队列；后端接入将在下一阶段实施。`)}
+                disabled={!evidenceFiles.length || busy.evidenceUpload}
+                onClick={() => { evidenceDialog.current?.showModal(); void handleEvidenceUpload(); }}
               >
-                加入前端待处理队列
+                {busy.evidenceUpload ? "上传中..." : "上传并检查资料"}
               </button>
               <button type="button" disabled={!evidenceFiles.length} onClick={() => { setEvidenceFiles([]); setEvidenceMessage(null); }}>
                 清空选择
               </button>
+              <button type="button" onClick={() => evidenceDialog.current?.showModal()}>查看资料与确认事实</button>
             </div>
             {evidenceMessage ? <p className="material-feedback" role="status">{evidenceMessage}</p> : null}
           </article>
@@ -2499,8 +2504,9 @@ function App() {
         </Panel>
       </section>
 
-      <section className="evidence-lab" aria-label="可信经历资料库">
-        <Panel title="可信经历资料库" kicker="Evidence Vault" className="module-panel evidence-library-panel legacy-material-panel">
+        <dialog ref={evidenceDialog} className="evidence-dialog" aria-label="资料检查与事实确认">
+          <button type="button" className="evidence-dialog-close" onClick={() => evidenceDialog.current?.close()}>关闭资料检查</button>
+        <Panel title="可信经历资料库" kicker="Evidence Vault" className="evidence-library-panel">
           <div className="evidence-manifesto">
             <div>
               <span>01 / COLLECT</span>
@@ -2733,6 +2739,8 @@ function App() {
           </div>
         </Panel>
 
+        </dialog>
+      <section className="evidence-lab" aria-label="可信经历资料库">
         <Panel title="按 JD 可信生成" kicker="Grounded Tailor" className="module-panel module-studio evidence-tailor-panel">
           <div className="trusted-job-banner">
             <span>当前岗位</span>
