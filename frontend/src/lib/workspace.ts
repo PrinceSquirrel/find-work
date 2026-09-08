@@ -4,7 +4,6 @@ export type WorkspaceModule =
   | "jobs"
   | "studio"
   | "applications"
-  | "agents"
   | "settings";
 
 export type WorkspaceNavItem = {
@@ -27,7 +26,6 @@ export const WORKSPACE_NAV_ITEMS: WorkspaceNavItem[] = [
   { id: "jobs", label: "岗位雷达", shortLabel: "岗位", description: "搜索、筛选与详情核验" },
   { id: "studio", label: "生成中心", shortLabel: "生成", description: "可信生成与人审材料" },
   { id: "applications", label: "投递跟踪", shortLabel: "投递", description: "投递漏斗与结果同步" },
-  { id: "agents", label: "Agent 运行", shortLabel: "Agent", description: "运行状态与最近动作" },
   { id: "settings", label: "系统设置", shortLabel: "设置", description: "模型、连接与系统检查" },
 ];
 
@@ -64,7 +62,6 @@ export const WORKSPACE_PANEL_TITLES: Record<WorkspaceModule, string[]> = {
   jobs: ["搜索任务", "岗位筛选表"],
   studio: ["按 JD 可信生成", "人审材料"],
   applications: ["求职进度漏斗", "投递结果表", "转化统计", "投递时段观察"],
-  agents: ["Agent 状态", "最近动作"],
   settings: ["系统状态", "模型 / API"],
 };
 

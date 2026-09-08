@@ -9,14 +9,13 @@ import {
 } from "./workspace";
 
 describe("workspace navigation", () => {
-  it("keeps the seven agreed product modules in a stable order", () => {
+  it("keeps six user modules without an internal agent page", () => {
     expect(WORKSPACE_NAV_ITEMS.map((item) => item.id)).toEqual([
       "dashboard",
       "materials",
       "jobs",
       "studio",
       "applications",
-      "agents",
       "settings",
     ]);
   });
@@ -42,9 +41,9 @@ describe("workspace navigation", () => {
   });
 
   it("returns the current module label and description", () => {
-    expect(getWorkspaceModule("agents")).toMatchObject({
-      label: "Agent 运行",
-      description: "运行状态与最近动作",
+    expect(getWorkspaceModule("settings")).toMatchObject({
+      label: "系统设置",
+      description: "模型、连接与系统检查",
     });
   });
 
@@ -52,6 +51,6 @@ describe("workspace navigation", () => {
     expect(WORKSPACE_PANEL_TITLES.dashboard).not.toContain("求职进度漏斗");
     expect(WORKSPACE_PANEL_TITLES.dashboard).not.toContain("最近动作");
     expect(WORKSPACE_PANEL_TITLES.applications).toContain("求职进度漏斗");
-    expect(WORKSPACE_PANEL_TITLES.agents).toContain("最近动作");
+    expect(WORKSPACE_NAV_ITEMS.some((item) => item.label === "Agent 运行")).toBe(false);
   });
 });

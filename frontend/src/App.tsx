@@ -162,7 +162,6 @@ const WORKSPACE_MODULE_ICONS: Record<WorkspaceModule, string> = {
   jobs: "⌕",
   studio: "✦",
   applications: "➤",
-  agents: "◎",
   settings: "⚙",
 };
 
@@ -444,7 +443,6 @@ function App() {
       jobs: jobs.length,
       studio: Object.keys(tailorBundles).length,
       applications: totalApplications,
-      agents: agentEvents?.events.length ?? 0,
     }),
     [agentEvents?.events.length, evidenceCards.length, jobs.length, resume, tailorBundles, totalApplications],
   );
@@ -1854,7 +1852,7 @@ function App() {
             </section>
           </>
         ) : (
-          <header className={`workspace-page-heading ${activeModule === "materials" || activeModule === "applications" ? "workspace-brand-hero" : ""}`}>
+          <header className="workspace-page-heading workspace-brand-hero">
             <div className="workspace-page-heading-copy">
               <p className="eyebrow">Squirrel World · Workspace</p>
               <h1>{activeModuleMeta.label}</h1>
@@ -1874,9 +1872,7 @@ function App() {
                 </div>
               ) : null}
             </div>
-            {activeModule === "materials" || activeModule === "applications" ? (
-              <img src="/squirrel-world-emblem.svg" alt={`松鼠世界${activeModuleMeta.label}`} />
-            ) : null}
+            <img src="/squirrel-world-emblem.svg" alt={`松鼠世界${activeModuleMeta.label}`} />
           </header>
         )}
 
@@ -2052,7 +2048,7 @@ function App() {
         <div className="platform-session-grid">
           {systemHealth ? (
             systemHealthSummary.cards.map((check) => (
-              <div className={`system-health-card tone-${check.tone}`} key={check.id}>
+              <div className={`system-health-card tone-${check.tone}`} key={check.id} title={`${check.summary}${check.nextAction ? " · " + check.nextAction : ""}`}>
                 <b>{check.label}</b>
                 <span>{check.statusLabel}</span>
                 <small>{check.summary}</small>
@@ -2501,96 +2497,6 @@ function App() {
             )}
           </div>
         </Panel>
-        <Panel title="最近动作" kicker="Recent Activity" className="module-panel module-agents recent-actions-panel">
-          {agentEvents?.events.length ? (
-            <div className="recent-action-list">
-              {agentEvents.events.slice(0, 8).map((event) => (
-                <article className={`recent-action status-${event.status}`} key={event.id}>
-                  <span className="recent-action-dot" aria-hidden="true" />
-                  <div>
-                    <b>{event.agent_name}</b>
-                    <p>{event.step || event.output_summary || "完成一次本地任务"}</p>
-                  </div>
-                  <small>{event.created_at ? formatDateTime(event.created_at) : event.status}</small>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <EmptyState title="暂无运行记录" text="执行简历解析、岗位搜索或材料生成后，最近动作会显示在这里。" />
-          )}
-        </Panel>
-      </section>
-
-      <section className="agent-monitor">
-        <Panel title="Agent 状态" kicker="Runtime Trace" className="module-panel module-agents agent-status-panel">
-          <div className="agent-monitor-head">
-            <span>当前运行：{runningAgent ?? "无"}</span>
-            <b>当前任务总成本 {agentCost}</b>
-            {orchestratorTaskId ? (
-              <button type="button" onClick={() => void handleToggleOrchestratorDetail(orchestratorTaskId)}>
-                {visibleOrchestratorDetail ? "收起步骤" : "查看步骤"}
-              </button>
-            ) : null}
-          </div>
-          {orchestratorSummary ? (
-            <div className={`orchestrator-summary status-${orchestratorSummary.status}`}>
-              <div>
-                <span>最近编排任务</span>
-                <b>{orchestratorSummary.taskName}</b>
-              </div>
-              <div>
-                <span>状态</span>
-                <b>{orchestratorSummary.status}</b>
-              </div>
-              <div>
-                <span>步骤</span>
-                <b>{orchestratorSummary.stepCount} steps</b>
-              </div>
-              <div>
-                <span>最近步骤</span>
-                <b>{orchestratorSummary.lastStep}</b>
-              </div>
-              {orchestratorSummary.errorMessage ? <em>错误：{orchestratorSummary.errorMessage}</em> : null}
-            </div>
-          ) : null}
-          {visibleOrchestratorDetail ? (
-            <div className="event-stack" aria-label="编排任务步骤详情">
-              {visibleOrchestratorDetail.retry_suggestion ? (
-                <span>
-                  重试边界：
-                  {visibleOrchestratorDetail.retry_suggestion.mode === "manual_only"
-                    ? "可人工重试，禁止自动重试"
-                    : "当前无需重试"}
-                  {" · "}
-                  {visibleOrchestratorDetail.retry_suggestion.next_action}
-                  {" · "}
-                  {visibleOrchestratorDetail.retry_suggestion.safety_boundary}
-                </span>
-              ) : null}
-              {visibleOrchestratorDetail.steps.map((step) => (
-                <span key={`${step.event_id}-${step.agent_name}-${step.status}`}>
-                  {step.agent_name} · {step.status} · {step.step}
-                  {step.error ? ` · 错误：${step.error}` : ""}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <div className="agent-status-grid">
-            {agentRows.map((row) => (
-              <article className={`agent-status-card status-${row.status}`} key={row.agentName}>
-                <header>
-                  <b>{row.agentName}</b>
-                  <span>{row.status}</span>
-                </header>
-                <p>{row.currentStep}</p>
-                <small>输入：{row.inputSummary}</small>
-                <small>输出：{row.outputSummary}</small>
-                {row.errorMessage ? <em>错误：{row.errorMessage}</em> : null}
-                <strong>{row.tokens.toLocaleString("en-US")} tokens</strong>
-              </article>
-            ))}
-          </div>
-        </Panel>
       </section>
 
       <section className="evidence-lab" aria-label="可信经历资料库">
@@ -2831,7 +2737,11 @@ function App() {
           <div className="trusted-job-banner">
             <span>当前岗位</span>
             <b>{selectedJob ? `${selectedJob.company} · ${selectedJob.title}` : "尚未选择岗位"}</b>
-            <small>先在下方岗位池选择岗位；这里不会改变原有岗位匹配和投递流程。</small>
+            <small>先在岗位雷达选择目标，再基于已确认经历生成。生成后仍需核对事实。</small>
+            <div className="evidence-actions">
+              <button type="button" onClick={() => activateWorkspaceModule("jobs")}>去岗位雷达选岗位</button>
+              <button type="button" onClick={() => activateWorkspaceModule("materials")}>查看资料工作台</button>
+            </div>
           </div>
           <div className="evidence-actions">
             <button type="button" disabled={!selectedJob || busy.evidenceRecommend} onClick={() => void handleRecommendEvidence()}>
@@ -3053,6 +2963,17 @@ function App() {
         </Panel>
 
         <Panel title="人审材料" kicker="Tailor Review" className="module-panel module-studio review-panel">
+          {!selectedBundle ? (
+            <div className="studio-guide" aria-label="生成与审核说明">
+              <b>先准备，再生成，不重复录入</b>
+              <ol>
+                <li>选择一个目标岗位<span>岗位雷达负责搜索与选择，这里不再重复搜索。</span></li>
+                <li>核对资料与事实<span>可信生成依赖已确认经历；新资料工作台的后端接入尚在计划中。</span></li>
+                <li>核对生成结果<span>左侧可信结果在左侧逐条审核；本栏展示岗位常规生成的材料，目前两者尚未合并。</span></li>
+                <li>确认后导出<span>保留事实校验与人工确认，不把草稿自动当作可投递材料。</span></li>
+              </ol>
+            </div>
+          ) : null}
           {selectedJob ? (
             <>
               <div className="review-heading">
@@ -3269,6 +3190,7 @@ function App() {
               {busy.syncApplications ? "同步中..." : "同步投递状态"}
             </button>
           </div>
+          <div className="application-results-scroll" role="region" aria-label="投递记录与同步建议" tabIndex={0}>
           {syncMessage ? <p className="sync-message">{syncMessage}</p> : null}
           {syncDiagnostics.length ? (
             <div className="sync-diagnostics">
@@ -3424,6 +3346,7 @@ function App() {
           ) : (
             <EmptyState title="暂无投递结果" text="确认投递后会记录平台、职位、当前状态和状态事件。" />
           )}
+          </div>
           <ApplicationPaginationPreview count={applications.length} loading={busy.boot} />
         </Panel>
 
