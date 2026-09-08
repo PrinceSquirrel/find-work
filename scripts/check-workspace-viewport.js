@@ -23,6 +23,13 @@ async (page) => {
           });
         return { width: root.scrollWidth, height: root.scrollHeight, panels };
       });
+      if (id === "dashboard" || id === "materials") {
+        const heroHeight = await page.locator(id === "dashboard" ? ".dashboard-hero" : ".workspace-page-heading").evaluate(element => element.getBoundingClientRect().height);
+        if (heroHeight < 180) throw new Error("Restored page was compacted: " + id);
+        if (layout.width > size.width + 1) throw new Error("Restored page has horizontal overflow");
+        results.push({ module: id, viewport: size, status: "original-layout-passed" });
+        continue;
+      }
       if (layout.width > size.width + 1 || layout.height > size.height + 1 ||
           layout.panels.some((panel) => panel.top < 0 || panel.bottom > size.height + 1 || panel.right > size.width + 1)) {
         throw new Error(JSON.stringify({ id, size, layout }));
