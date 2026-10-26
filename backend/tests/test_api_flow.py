@@ -2559,6 +2559,26 @@ def test_tailored_resume_pdf_requires_docx_template(tmp_path):
     assert "重新上传 DOCX" in pdf_response.json()["detail"]
 
 
+def test_material_history_preserves_legacy_results_and_job_isolation(tmp_path):
+    client = TestClient(create_app(db_path=tmp_path / "history.sqlite3"))
+    resume_id, job_id = _create_evidence_job_context(client)
+    assert client.get(f"/api/jobs/{job_id}/materials").json() == []
+    first = client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+    assert first.status_code == 201
+    second = client.post(f"/api/jobs/{job_id}/tailor", json={"resume_id": resume_id})
+    assert second.status_code == 201
+    history = client.get(f"/api/jobs/{job_id}/materials").json()
+    assert [item["id"] for item in history] == [second.json()["id"], first.json()["id"]]
+    assert all(item["claims"] == [] and item["job_id"] == job_id for item in history)
+    another_search = client.post("/api/search-runs", json={
+        "resume_id": resume_id, "keywords": ["数据分析"], "city": "上海", "platforms": ["boss"],
+    })
+    assert another_search.status_code == 201
+    other_jobs = [job for job in client.get("/api/jobs").json() if job["id"] != job_id]
+    assert other_jobs
+    assert client.get(f"/api/jobs/{other_jobs[0]['id']}/materials").json() == []
+
+
 def test_trusted_evidence_library_end_to_end_requires_claim_review(tmp_path):
     app = create_app(db_path=tmp_path / "agent-business.sqlite3")
     client = TestClient(app)
@@ -2611,6 +2631,12 @@ def test_trusted_evidence_library_end_to_end_requires_claim_review(tmp_path):
     tailored_resume_id = trusted["id"]
     claim_id = trusted["claims"][0]["id"]
 
+    history = client.get(f"/api/jobs/{job_id}/materials")
+    assert history.status_code == 200
+    assert history.json()[0]["id"] == tailored_resume_id
+    assert history.json()[0]["claims"][0]["id"] == claim_id
+    assert client.get("/api/jobs/999999/materials").status_code == 404
+
     blocked_finalize = client.post(f"/api/trusted-tailors/{tailored_resume_id}/finalize")
     assert blocked_finalize.status_code == 409
     blocked_pdf = client.get(f"/api/tailored-resumes/{tailored_resume_id}/pdf")
@@ -2641,6 +2667,12 @@ def test_trusted_evidence_library_end_to_end_requires_claim_review(tmp_path):
     assert final_response.status_code == 200
     assert final_response.json()["review"]["trusted_evidence_finalized"] is True
     assert "负责需求拆解" in final_response.json()["resume_rewrite"]
+
+    restarted = TestClient(create_app(db_path=tmp_path / "agent-business.sqlite3"))
+    restored = restarted.get(f"/api/jobs/{job_id}/materials").json()[0]
+    assert restored["id"] == tailored_resume_id
+    assert restored["review"]["trusted_evidence_finalized"] is True
+    assert restored["resume_rewrite"] == final_response.json()["resume_rewrite"]
 
     impact = client.get(f"/api/evidence-sources/{source['id']}/delete-impact")
     assert impact.status_code == 200

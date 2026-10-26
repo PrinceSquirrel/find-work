@@ -358,6 +358,13 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/api/jobs/{job_id}/materials")
+    def list_job_materials(job_id: int):
+        try:
+            return app.state.service.store.list_job_materials(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/api/trusted-tailors/{tailored_resume_id}")
     def get_trusted_tailor(tailored_resume_id: int):
         try:

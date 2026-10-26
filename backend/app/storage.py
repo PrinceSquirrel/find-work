@@ -1381,6 +1381,19 @@ class SQLiteStore:
             "review": review,
         }
 
+    def list_job_materials(self, job_id: int) -> list[dict[str, Any]]:
+        self.get_job(job_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM tailored_resumes WHERE job_id = ? ORDER BY id DESC",
+                (job_id,),
+            ).fetchall()
+        return [
+            {**self.get_tailor_bundle(row["id"]),
+             "claims": [claim.model_dump(mode="json") for claim in self.list_tailored_claims(row["id"])]}
+            for row in rows
+        ]
+
     def get_tailor_bundle(self, tailored_resume_id: int) -> dict[str, Any]:
         with self._connect() as conn:
             row = conn.execute(

@@ -3300,3 +3300,10 @@ Updated: 2026-07-03 Asia/Shanghai
 - 修改 App.tsx、新增 lib/studio.ts、lib/studio.test.ts，以及本状态文件。后端 119、前端 63 测试通过，lint/build 和 diff 检查通过。后端旧临时目录权限失败后，改用独立 output/pytest-studio-20261026-a 全量通过。
 - 两种尺寸六页共 12 项浏览器布局检查通过（后端未启动时的空状态）；无真实上传、模型调用或投递。
 - 本阶段提交信息 feat: unify evidence-backed studio review；提交后立即推送并核对远端。整体计划仍 in_progress：刷新恢复材料、集成回归和计划文档待完成。
+
+### 材料历史接口阶段
+
+- 上阶段 e85caf8279b3e8c3b7674e9fcd07fa2d0195e8d4 已推送并核对远端一致。
+- 新增 GET /api/jobs/{job_id}/materials，倒序返回同岗位既有材料及引用，不改写旧数据。测试覆盖空历史、旧生成结果、岗位隔离、重启后定稿版本一致。
+- 后端全量 120 项通过（修正测试夹具只有一个岗位的假设后重跑）；前端 63 项、lint/build 通过。四文件阶段：storage.py、main.py、test_api_flow.py、本文件。
+- 提交信息 feat: expose persisted job material history；前端接入与集成回归待下一阶段。
