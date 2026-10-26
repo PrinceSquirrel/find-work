@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApplicationFilterPreview, ApplicationPaginationPreview } from "./ApplicationTrackingControls";
 import { api, getTailorBlockedMessage } from "./lib/api";
 import { uploadEvidenceBatch } from "./lib/evidenceUpload";
+import { canExportTrusted, chooseConfirmedCards, hasUnsavedClaims, saveJobResult } from "./lib/studio";
 import {
   buildAgentStatusRows,
   buildAgentStatusRowsFromEvents,
@@ -346,7 +347,13 @@ function App() {
   const [selectedEvidenceCardIds, setSelectedEvidenceCardIds] = useState<number[]>([]);
   const evidenceDialog = useRef<HTMLDialogElement>(null);
   const evidenceUploadLock = useRef(false);
-  const [trustedTailor, setTrustedTailor] = useState<TrustedTailorBundle | null>(null);
+  const studioLock = useRef(false);
+  const [studioTab, setStudioTab] = useState<"resume" | "greeting">("resume");
+  const activeStudioJobId = useRef<number | undefined>(undefined);
+  const [trustedTailors, setTrustedTailors] = useState<Record<number, TrustedTailorBundle>>({});
+  function setTrustedTailor(bundle: TrustedTailorBundle | null) {
+    setTrustedTailors(current => bundle ? saveJobResult(current, bundle) : {});
+  }
   const [trustedClaimDrafts, setTrustedClaimDrafts] = useState<Record<number, string>>({});
   const [evidenceMessage, setEvidenceMessage] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
@@ -407,6 +414,13 @@ function App() {
     [jobs, rankedJobs, selectedJobId]
   );
   const selectedBundle = selectedJob ? tailorBundles[selectedJob.id] : undefined;
+  const trustedTailor = selectedJob ? trustedTailors[selectedJob.id] ?? null : null;
+  activeStudioJobId.current = selectedJob?.id;
+  useEffect(() => {
+    setSelectedEvidenceCardIds([]);
+    setEvidenceRecommendations([]);
+    setStudioTab("resume");
+  }, [selectedJob?.id]);
   const selectedTailorBlockedMessage = selectedJob ? tailorBlockedMessages[selectedJob.id] : "";
   const selectedApplyPreview = selectedJob ? applyPreviews[selectedJob.id] : undefined;
   const selectedTailorModelSummary = useMemo(
@@ -1256,41 +1270,8 @@ function App() {
   }
 
   async function handleTailor(job: JobPosting) {
-    if (!resume?.id) {
-      setError("请先上传简历，再生成定制材料。");
-      return;
-    }
-    if (!resumeReadingStatus.canGenerateMaterials) {
-      setError("当前简历还没有可用正文，请先补全文本。");
-      return;
-    }
-    setBusy((current) => ({ ...current, tailorJobId: job.id }));
-    setError(null);
-    setPdfStatusMessage(null);
-    setTailorBlockedMessages((current) => {
-      const { [job.id]: _removed, ...rest } = current;
-      return rest;
-    });
-    try {
-      const bundle = await api.tailorJob(job.id, resume.id);
-      setTailorBundles((current) => ({ ...current, [job.id]: bundle }));
-      const editableText = getBundleEditableText(bundle);
-      setTailoredRevisionDrafts((current) => ({ ...current, [bundle.id]: editableText }));
-      setTailoredRevisionMessages((current) => ({ ...current, [bundle.id]: "已生成初始可编辑版本。" }));
-      setSelectedJobId(job.id);
-      await refreshOutcomeData();
-    } catch (nextError) {
-      const blockedMessage = getTailorBlockedMessage(nextError);
-      if (blockedMessage) {
-        setSelectedJobId(job.id);
-        setTailorBlockedMessages((current) => ({ ...current, [job.id]: blockedMessage }));
-        setError("该岗位详情还不完整，需先刷新或人工补全 JD。");
-      } else {
-        setError(toErrorMessage(nextError));
-      }
-    } finally {
-      setBusy((current) => ({ ...current, tailorJobId: null }));
-    }
+    setSelectedJobId(job.id);
+    activateWorkspaceModule("studio");
   }
 
   async function handleSaveTailoredRevision(bundle: TailorBundle) {
@@ -1332,6 +1313,10 @@ function App() {
   }
 
   async function handleDownloadTailoredPdf(bundle: TailorBundle) {
+    if ("claims" in bundle && !canExportTrusted(bundle as TrustedTailorBundle, trustedClaimDrafts)) {
+      setError("请先保存修改、核验并定稿，再导出当前版本。");
+      return;
+    }
     const pdfStatus = getPdfTemplateStatus(resume, true, null);
     if (!pdfStatus.canDownload) {
       setPdfStatusMessage(pdfStatus.label);
@@ -1603,20 +1588,29 @@ function App() {
   }
 
   async function handleGenerateTrustedTailor() {
+    if (studioLock.current) return;
     if (!selectedJob || !resume?.id) {
       setError("请先上传简历并选择岗位。");
       return;
     }
-    if (!selectedEvidenceCardIds.length) {
-      setError("请至少选择一张已确认经历卡片。");
+    if (!confirmedEvidenceCards.length) {
+      setError("请先在资料工作台确认至少一张真实经历卡片。");
       return;
     }
+    studioLock.current = true;
     setBusy((current) => ({ ...current, trustedTailorJobId: selectedJob.id }));
     setError(null);
     try {
-      const bundle = await api.generateTrustedTailor(selectedJob.id, resume.id, selectedEvidenceCardIds);
+      let cardIds = chooseConfirmedCards(evidenceCards, selectedEvidenceCardIds);
+      if (!cardIds.length) {
+        const recommendations = await api.getEvidenceRecommendations(selectedJob.id);
+        if (activeStudioJobId.current === selectedJob.id) setEvidenceRecommendations(recommendations);
+        cardIds = chooseConfirmedCards(evidenceCards, recommendations.filter(item => item.score >= 40).map(item => item.card.id));
+        if (!cardIds.length) throw new Error("未找到足够相关的经历，请在左侧手动选择已确认卡片。");
+      }
+      const bundle = await api.generateTrustedTailor(selectedJob.id, resume.id, cardIds);
       setTrustedTailor(bundle);
-      setTrustedClaimDrafts(Object.fromEntries(bundle.claims.map((claim) => [claim.id, claim.text])));
+      setTrustedClaimDrafts(current => ({ ...current, ...Object.fromEntries(bundle.claims.map((claim) => [claim.id, claim.text])) }));
       setEvidenceMessage(
         bundle.generation_mode === "external_ai"
           ? "模型已生成可追溯内容，请逐条核验后接受。"
@@ -1625,6 +1619,7 @@ function App() {
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
+      studioLock.current = false;
       setBusy((current) => ({ ...current, trustedTailorJobId: null }));
     }
   }
@@ -1665,6 +1660,10 @@ function App() {
 
   async function handleFinalizeTrustedTailor() {
     if (!trustedTailor) return;
+    if (hasUnsavedClaims(trustedTailor, trustedClaimDrafts)) {
+      setError("请先保存修改并核对证据，再定稿。");
+      return;
+    }
     setBusy((current) => ({ ...current, trustedFinalizeId: trustedTailor.id }));
     setError(null);
     try {
@@ -2068,64 +2067,6 @@ function App() {
 
       <section className="workspace-grid">
         <div className="stack">
-          <Panel title="简历上传" kicker="Resume Intake" className="module-panel resume-panel legacy-material-panel">
-            <form className="upload-form" onSubmit={handleUpload}>
-              <label className="file-drop">
-                <input
-                  type="file"
-                  accept=".txt,.pdf,.doc,.docx,.png,.jpg,.jpeg"
-                  onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
-                />
-                <span>{uploadFile?.name ?? "选择简历文件"}</span>
-                <small>支持 txt/pdf/docx/png/jpg，文件只提交给本地后端解析。</small>
-              </label>
-              <button className="primary" type="submit" disabled={busy.upload}>
-                {busy.upload ? "上传中..." : "上传并解析"}
-              </button>
-            </form>
-            {resume ? (
-              <div className="resume-card">
-                <b>{resume.filename}</b>
-                <span>ID #{resume.id} · {formatDateTime(resume.created_at)}</span>
-                <div className="resume-reading-status">
-                  <span
-                    className={`chip ${
-                      resumeReadingStatus.tone === "success"
-                        ? "positive"
-                        : resumeReadingStatus.tone === "warning"
-                        ? "warning"
-                        : ""
-                    }`}
-                  >
-                    {resumeReadingStatus.label}
-                  </span>
-                  <small>{resumeReadingStatus.detail}</small>
-                  {resumeReadingStatus.actionHint ? <small>{resumeReadingStatus.actionHint}</small> : null}
-                </div>
-                {resume.raw_text ? (
-                  <p>{resume.raw_text.slice(0, 96)}{resume.raw_text.length > 96 ? "..." : ""}</p>
-                ) : null}
-                {resumeReadingStatus.needsManualText ? (
-                  <div className="manual-resume-editor">
-                    <label>
-                      <span>粘贴简历正文</span>
-                      <textarea
-                        rows={7}
-                        value={manualResumeText}
-                        onChange={(event) => setManualResumeText(event.target.value)}
-                        placeholder="如果 PDF/图片无法自动读取，请把简历正文粘贴到这里。保存后会重新提取技能、推荐关键词和城市。"
-                      />
-                    </label>
-                    <button type="button" onClick={() => void handleManualResumeTextUpdate()} disabled={busy.manualResumeText}>
-                      {busy.manualResumeText ? "保存中..." : "保存简历正文"}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <EmptyState title="还没有简历" text="上传后才能创建搜索任务和生成定制材料。" />
-            )}
-          </Panel>
 
           <Panel title="模型 / API" kicker="LLM Agent" className="module-panel module-settings model-panel">
             <div className="model-simple-card">
@@ -2505,6 +2446,67 @@ function App() {
       </section>
 
         <dialog ref={evidenceDialog} className="evidence-dialog" aria-label="资料检查与事实确认">
+          <details open={!resume}>
+            <summary>基础简历：提供个人信息与搜索条件</summary>
+          <Panel title="简历上传" kicker="Resume Intake" className="resume-panel">
+            <form className="upload-form" onSubmit={handleUpload}>
+              <label className="file-drop">
+                <input
+                  type="file"
+                  accept=".txt,.pdf,.doc,.docx,.png,.jpg,.jpeg"
+                  onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+                />
+                <span>{uploadFile?.name ?? "选择简历文件"}</span>
+                <small>支持 txt/pdf/docx/png/jpg，文件只提交给本地后端解析。</small>
+              </label>
+              <button className="primary" type="submit" disabled={busy.upload}>
+                {busy.upload ? "上传中..." : "上传并解析"}
+              </button>
+            </form>
+            {resume ? (
+              <div className="resume-card">
+                <b>{resume.filename}</b>
+                <span>ID #{resume.id} · {formatDateTime(resume.created_at)}</span>
+                <div className="resume-reading-status">
+                  <span
+                    className={`chip ${
+                      resumeReadingStatus.tone === "success"
+                        ? "positive"
+                        : resumeReadingStatus.tone === "warning"
+                        ? "warning"
+                        : ""
+                    }`}
+                  >
+                    {resumeReadingStatus.label}
+                  </span>
+                  <small>{resumeReadingStatus.detail}</small>
+                  {resumeReadingStatus.actionHint ? <small>{resumeReadingStatus.actionHint}</small> : null}
+                </div>
+                {resume.raw_text ? (
+                  <p>{resume.raw_text.slice(0, 96)}{resume.raw_text.length > 96 ? "..." : ""}</p>
+                ) : null}
+                {resumeReadingStatus.needsManualText ? (
+                  <div className="manual-resume-editor">
+                    <label>
+                      <span>粘贴简历正文</span>
+                      <textarea
+                        rows={7}
+                        value={manualResumeText}
+                        onChange={(event) => setManualResumeText(event.target.value)}
+                        placeholder="如果 PDF/图片无法自动读取，请把简历正文粘贴到这里。保存后会重新提取技能、推荐关键词和城市。"
+                      />
+                    </label>
+                    <button type="button" onClick={() => void handleManualResumeTextUpdate()} disabled={busy.manualResumeText}>
+                      {busy.manualResumeText ? "保存中..." : "保存简历正文"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <EmptyState title="还没有简历" text="上传后才能创建搜索任务和生成定制材料。" />
+            )}
+          </Panel>
+          </details>
           <button type="button" className="evidence-dialog-close" onClick={() => evidenceDialog.current?.close()}>关闭资料检查</button>
         <Panel title="可信经历资料库" kicker="Evidence Vault" className="evidence-library-panel">
           <div className="evidence-manifesto">
@@ -2748,19 +2750,23 @@ function App() {
             <small>先在岗位雷达选择目标，再基于已确认经历生成。生成后仍需核对事实。</small>
             <div className="evidence-actions">
               <button type="button" onClick={() => activateWorkspaceModule("jobs")}>去岗位雷达选岗位</button>
-              <button type="button" onClick={() => activateWorkspaceModule("materials")}>查看资料工作台</button>
+              <button type="button" onClick={() => evidenceDialog.current?.showModal()}>检查资料与确认事实</button>
             </div>
           </div>
           <div className="evidence-actions">
-            <button type="button" disabled={!selectedJob || busy.evidenceRecommend} onClick={() => void handleRecommendEvidence()}>
-              {busy.evidenceRecommend ? "分析中..." : "根据 JD 推荐经历"}
-            </button>
-            <button className="primary" type="button" disabled={!resume || !selectedEvidenceCardIds.length || busy.trustedTailorJobId !== null} onClick={() => void handleGenerateTrustedTailor()}>
-              {busy.trustedTailorJobId !== null ? "生成中..." : `使用 ${selectedEvidenceCardIds.length} 张卡片生成`}
+            <button className="primary" type="button" disabled={!selectedJob || !resume || !confirmedEvidenceCards.length || busy.trustedTailorJobId !== null} onClick={() => void handleGenerateTrustedTailor()}>
+              {busy.trustedTailorJobId !== null ? "推荐与生成中..." : "生成求职材料"}
             </button>
           </div>
 
           <div className="recommendation-list">
+            <p>可手动勾选经历；不勾选时自动推荐相关的已确认事实。</p>
+            {!evidenceRecommendations.length ? confirmedEvidenceCards.map(card => (
+              <label className="recommendation-card" key={card.id}>
+                <input type="checkbox" checked={selectedEvidenceCardIds.includes(card.id)} onChange={() => toggleEvidenceCard(card.id)} />
+                <span>{card.title} · 已确认</span>
+              </label>
+            )) : null}
             {evidenceRecommendations.length ? evidenceRecommendations.map((recommendation) => (
               <label className={`recommendation-card ${selectedEvidenceCardIds.includes(recommendation.card.id) ? "is-selected" : ""}`} key={recommendation.card.id}>
                 <input
@@ -2775,68 +2781,13 @@ function App() {
                 </div>
               </label>
             )) : confirmedEvidenceCards.length ? (
-              <EmptyState title="等待 JD 推荐" text="点击上方按钮，系统只会从已确认卡片中推荐。" />
+              <small>生成只使用已确认事实，不自动投递。</small>
             ) : (
               <EmptyState title="没有可用证据" text="至少确认一张经历卡片后才能生成可信简历。" />
             )}
           </div>
 
-          {trustedTailor ? (
-            <div className="trusted-tailor-result">
-              <div className="trusted-result-heading">
-                <div>
-                  <span>生成模式</span>
-                  <b>{trustedTailor.generation_mode === "external_ai" ? "外部模型 · 严格证据约束" : "本地安全模式"}</b>
-                </div>
-                <span className={`truth-badge ${trustedTailor.review.trusted_evidence_finalized ? "pass" : "risk"}`}>
-                  {trustedTailor.review.trusted_evidence_finalized ? "已定稿" : "等待逐条核验"}
-                </span>
-              </div>
-              <div className="trusted-claim-list">
-                {trustedTailor.claims.map((claim) => (
-                  <article className={`trusted-claim status-${claim.support_status}`} key={claim.id}>
-                    <header>
-                      <b>简历内容 #{claim.id}</b>
-                      <span>{claim.user_decision === "accepted" ? "已接受" : claim.user_decision === "rejected" ? "不采用" : claim.support_status === "needs_review" ? "修改后待复核" : "待确认"}</span>
-                    </header>
-                    <textarea
-                      rows={4}
-                      value={trustedClaimDrafts[claim.id] ?? claim.text}
-                      onChange={(event) => setTrustedClaimDrafts((current) => ({ ...current, [claim.id]: event.target.value }))}
-                    />
-                    <div className="claim-evidence-links">
-                      {claim.evidence_card_ids.map((cardId) => {
-                        const card = evidenceCardsById.get(cardId);
-                        return <span className="chip positive" key={cardId}>证据 #{cardId} · {card?.title ?? "卡片已删除"}</span>;
-                      })}
-                    </div>
-                    <div className="evidence-actions">
-                      <button type="button" disabled={busy.trustedClaimId === claim.id} onClick={() => void handleTrustedClaim(claim.id, "save")}>保存修改</button>
-                      <button className="primary" type="button" disabled={busy.trustedClaimId === claim.id} onClick={() => void handleTrustedClaim(claim.id, "accept")}>核对证据并接受</button>
-                      <button type="button" disabled={busy.trustedClaimId === claim.id} onClick={() => void handleTrustedClaim(claim.id, "reject")}>不采用</button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-              <div className="trusted-finalize-bar">
-                <div>
-                  <b>导出门槛</b>
-                  <span>所有保留内容必须处于“已支持 + 已接受”。</span>
-                </div>
-                <button type="button" disabled={busy.trustedFinalizeId === trustedTailor.id} onClick={() => void handleFinalizeTrustedTailor()}>
-                  {busy.trustedFinalizeId === trustedTailor.id ? "定稿中..." : "完成核验并定稿"}
-                </button>
-                <button
-                  className="primary"
-                  type="button"
-                  disabled={!trustedTailor.review.trusted_evidence_finalized}
-                  onClick={() => void handleDownloadTailoredPdf(trustedTailor)}
-                >
-                  导出模板化 PDF
-                </button>
-              </div>
-            </div>
-          ) : null}
+
         </Panel>
       </section>
 
@@ -2971,13 +2922,76 @@ function App() {
         </Panel>
 
         <Panel title="人审材料" kicker="Tailor Review" className="module-panel module-studio review-panel">
+          {trustedTailor ? (
+            <div className="trusted-tailor-result">
+              <div className="evidence-actions" aria-label="材料视图">
+                <button type="button" aria-pressed={studioTab === "resume"} onClick={() => setStudioTab("resume")}>简历</button>
+                <button type="button" aria-pressed={studioTab === "greeting"} onClick={() => setStudioTab("greeting")}>招呼语</button>
+                <span>材料 #{trustedTailor.id}</span>
+              </div>
+              {studioTab === "greeting" ? <p>{trustedTailor.greeting.message}</p> : null}
+              <div className="trusted-result-heading">
+                <div>
+                  <span>生成模式</span>
+                  <b>{trustedTailor.generation_mode === "external_ai" ? "外部模型 · 严格证据约束" : "本地安全模式"}</b>
+                </div>
+                <span className={`truth-badge ${trustedTailor.review.trusted_evidence_finalized ? "pass" : "risk"}`}>
+                  {trustedTailor.review.trusted_evidence_finalized ? "已定稿" : "等待逐条核验"}
+                </span>
+              </div>
+              <div className="trusted-claim-list" style={{ display: studioTab === "resume" ? undefined : "none" }}>
+                {trustedTailor.claims.map((claim) => (
+                  <article className={`trusted-claim status-${claim.support_status}`} key={claim.id}>
+                    <header>
+                      <b>简历内容 #{claim.id}</b>
+                      <span>{claim.user_decision === "accepted" ? "已接受" : claim.user_decision === "rejected" ? "不采用" : claim.support_status === "needs_review" ? "修改后待复核" : "待确认"}</span>
+                    </header>
+                    <textarea
+                      rows={4}
+                      value={trustedClaimDrafts[claim.id] ?? claim.text}
+                      onChange={(event) => setTrustedClaimDrafts((current) => ({ ...current, [claim.id]: event.target.value }))}
+                    />
+                    <div className="claim-evidence-links">
+                      {claim.evidence_card_ids.map((cardId) => {
+                        const card = evidenceCardsById.get(cardId);
+                        return <span className="chip positive" key={cardId}>证据 #{cardId} · {card?.title ?? "卡片已删除"}</span>;
+                      })}
+                    </div>
+                    <div className="evidence-actions">
+                      <button type="button" disabled={busy.trustedClaimId === claim.id} onClick={() => void handleTrustedClaim(claim.id, "save")}>保存修改</button>
+                      <button className="primary" type="button" disabled={busy.trustedClaimId === claim.id} onClick={() => void handleTrustedClaim(claim.id, "accept")}>核对证据并接受</button>
+                      <button type="button" disabled={busy.trustedClaimId === claim.id} onClick={() => void handleTrustedClaim(claim.id, "reject")}>不采用</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <div className="trusted-finalize-bar">
+                <div>
+                  <b>导出门槛</b>
+                  <span>所有保留内容必须处于“已支持 + 已接受”。</span>
+                </div>
+                <button type="button" disabled={busy.trustedFinalizeId === trustedTailor.id || Boolean(busy.trustedClaimId) || hasUnsavedClaims(trustedTailor, trustedClaimDrafts)} onClick={() => void handleFinalizeTrustedTailor()}>
+                  {busy.trustedFinalizeId === trustedTailor.id ? "定稿中..." : "完成核验并定稿"}
+                </button>
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={!canExportTrusted(trustedTailor, trustedClaimDrafts)}
+                  onClick={() => void handleDownloadTailoredPdf(trustedTailor)}
+                >
+                  导出模板化 PDF
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <div hidden={Boolean(trustedTailor)}>
           {!selectedBundle ? (
             <div className="studio-guide" aria-label="生成与审核说明">
               <b>先准备，再生成，不重复录入</b>
               <ol>
                 <li>选择一个目标岗位<span>岗位雷达负责搜索与选择，这里不再重复搜索。</span></li>
-                <li>核对资料与事实<span>可信生成依赖已确认经历；新资料工作台的后端接入尚在计划中。</span></li>
-                <li>核对生成结果<span>左侧可信结果在左侧逐条审核；本栏展示岗位常规生成的材料，目前两者尚未合并。</span></li>
+                <li>核对资料与事实<span>从资料检查弹窗上传、提取并确认真实经历。</span></li>
+                <li>核对生成结果<span>左侧生成的同一份材料会出现在本栏，修改后必须重新核验。</span></li>
                 <li>确认后导出<span>保留事实校验与人工确认，不把草稿自动当作可投递材料。</span></li>
               </ol>
             </div>
@@ -3173,12 +3187,13 @@ function App() {
                   </button>
                 </div>
               ) : (
-                <EmptyState title="尚未生成材料" text="在岗位表中点击“生成材料”，这里会展示定制简历、招呼语和风险提示。" />
+                <EmptyState title="尚未生成材料" text="点击左侧“生成求职材料”，这里会展示同一份简历、招呼语和核验状态。" />
               )}
             </>
           ) : (
             <EmptyState title="未选中岗位" text="搜索后选择一个岗位进行材料生成和人审。" />
           )}
+          </div>
         </Panel>
       </section>
 
