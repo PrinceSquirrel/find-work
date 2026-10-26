@@ -1549,7 +1549,8 @@ class SQLiteStore:
         if not claims:
             return True
         included = [claim for claim in claims if claim.user_decision != "rejected"]
-        return bool(included) and all(
+        finalized = self.get_tailor_bundle(tailored_resume_id)["review"].get("trusted_evidence_finalized") is True
+        return finalized and bool(included) and all(
             claim.support_status == "supported" and claim.user_decision == "accepted" for claim in included
         )
 

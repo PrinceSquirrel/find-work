@@ -97,6 +97,14 @@ python -m pip install -r backend\requirements.txt
 
 ## 启动后端
 
+### 生成中心：同一材料审核与导出
+
+仪表盘、资料工作台保留原布局。资料工作台的“查看资料与确认事实”打开检查弹窗，基础简历也在该弹窗维护；支持的资料上传后需提取并确认真实经历。岗位雷达选择岗位后进入生成中心，使用单个“生成求职材料”入口，右侧切换简历/招呼语、审核并定稿后导出。修改后必须重新核验；切换视图不会再次调用模型。
+
+刷新后恢复最近的岗位批次与材料，右侧“材料版本”可查看旧结果。只读接口 `GET /api/jobs/{job_id}/materials` 返回同岗位版本与引用；不会删除或迁移历史数据。
+
+模拟交互验证：在前后端启动后，使用上述 Playwright 会话运行 `run-code --filename scripts/check-studio-flow.js`。脚本拦截写请求，不调用真实模型或招聘平台。超出已支持范围的资料格式、OCR/WPS 编辑仍是后续计划。
+
 ```powershell
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn app.main:app --reload --app-dir backend

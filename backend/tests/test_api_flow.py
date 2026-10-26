@@ -2662,6 +2662,7 @@ def test_trusted_evidence_library_end_to_end_requires_claim_review(tmp_path):
     assert accepted_response.status_code == 200
     assert accepted_response.json()["support_status"] == "supported"
     assert accepted_response.json()["user_decision"] == "accepted"
+    assert client.get(f"/api/tailored-resumes/{tailored_resume_id}/pdf").status_code == 409
 
     final_response = client.post(f"/api/trusted-tailors/{tailored_resume_id}/finalize")
     assert final_response.status_code == 200
@@ -2673,6 +2674,10 @@ def test_trusted_evidence_library_end_to_end_requires_claim_review(tmp_path):
     assert restored["id"] == tailored_resume_id
     assert restored["review"]["trusted_evidence_finalized"] is True
     assert restored["resume_rewrite"] == final_response.json()["resume_rewrite"]
+    assert app.state.service.store.can_export_tailored_resume(tailored_resume_id) is True
+    client.patch(f"/api/tailored-claims/{claim_id}", json={"text": "再次修改接口说明"})
+    assert app.state.service.store.can_export_tailored_resume(tailored_resume_id) is False
+    assert client.get(f"/api/tailored-resumes/{tailored_resume_id}/pdf").status_code == 409
 
     impact = client.get(f"/api/evidence-sources/{source['id']}/delete-impact")
     assert impact.status_code == 200

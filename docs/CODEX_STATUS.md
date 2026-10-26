@@ -3315,3 +3315,12 @@ Updated: 2026-07-03 Asia/Shanghai
 - 五文件：App.tsx、lib/api.ts、lib/api.test.ts、scripts/check-studio-flow.js、本文件。
 - 浏览器模拟回归通过失败重试、重复点击、切岗延迟返回、无模型调用的视图切换、审核定稿、未保存编辑拦截导出、刷新恢复、无证据、无岗位；全部写请求拦截，不操作真实模型/平台。
 - 全量后端 120、前端 64 项及 lint/build 通过；服务启动后的 12 项布局检查通过。提交信息 feat: restore studio material history and verify workflow。
+
+### 最终验收（2026-10-26）
+
+- 状态：本次“恢复两页 + 执行生成中心精简计划”实现及验证完成。04ef8c3cde75dbc2feb69c7720e1ce01f457603f 已推送且与远端一致。
+- 后台 PDF 导出增加定稿门槛；测试验证“接受但未定稿”及“定稿后再编辑”均被拒绝。旧无证据材料沿用原有流程，不删除历史。
+- 最终后端全量 120 passed（reportlab 既有弃用警告 1 项）、前端 64 passed，lint/build、diff 检查通过；浏览器 12 项布局和 10 类模拟交互通过。
+- 最后五文件：storage.py、test_api_flow.py、README.md、STUDIO_SIMPLIFICATION_PLAN.md、本文件。提交信息 fix: require finalized evidence before PDF export；提交后立即推送并校验。
+- 启动仍为 scripts/start-project.ps1 -SkipInstall；访问 http://127.0.0.1:5173/。生成中心显示准备区、审核区、材料版本与简历/招呼语切换；两页原布局不变。
+- 其他计划中的 OCR/WPS、扩展格式及真实投递筛选仍未实施。未调用真实模型、上传私人文件或操作招聘平台；测试临时数据留在 output/，不提交。两个用户未跟踪文件保持原样。
