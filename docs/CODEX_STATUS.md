@@ -3307,3 +3307,11 @@ Updated: 2026-07-03 Asia/Shanghai
 - 新增 GET /api/jobs/{job_id}/materials，倒序返回同岗位既有材料及引用，不改写旧数据。测试覆盖空历史、旧生成结果、岗位隔离、重启后定稿版本一致。
 - 后端全量 120 项通过（修正测试夹具只有一个岗位的假设后重跑）；前端 63 项、lint/build 通过。四文件阶段：storage.py、main.py、test_api_flow.py、本文件。
 - 提交信息 feat: expose persisted job material history；前端接入与集成回归待下一阶段。
+
+### 历史恢复及交互回归阶段
+
+- 历史接口提交 41ba2ff36000f04f28b86436ca0a138ee2e33080 已推送且远端一致。
+- 前端恢复最新岗位批次、同岗位材料版本选择；旧材料仍可审核。历史读取失败明确提示，不伪造空历史。
+- 五文件：App.tsx、lib/api.ts、lib/api.test.ts、scripts/check-studio-flow.js、本文件。
+- 浏览器模拟回归通过失败重试、重复点击、切岗延迟返回、无模型调用的视图切换、审核定稿、未保存编辑拦截导出、刷新恢复、无证据、无岗位；全部写请求拦截，不操作真实模型/平台。
+- 全量后端 120、前端 64 项及 lint/build 通过；服务启动后的 12 项布局检查通过。提交信息 feat: restore studio material history and verify workflow。

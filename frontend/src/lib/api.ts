@@ -184,6 +184,10 @@ export const api = {
     });
   },
 
+  listJobMaterials(jobId: number): Promise<TrustedTailorBundle[]> {
+    return request<TrustedTailorBundle[]>(`/api/jobs/${encodeURIComponent(jobId)}/materials`);
+  },
+
   getTrustedTailor(tailoredResumeId: number): Promise<TrustedTailorBundle> {
     return request<TrustedTailorBundle>(`/api/trusted-tailors/${encodeURIComponent(tailoredResumeId)}`);
   },

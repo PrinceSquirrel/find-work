@@ -349,6 +349,8 @@ function App() {
   const evidenceUploadLock = useRef(false);
   const studioLock = useRef(false);
   const [studioTab, setStudioTab] = useState<"resume" | "greeting">("resume");
+  const [materialHistory, setMaterialHistory] = useState<Record<number, TrustedTailorBundle[]>>({});
+  const [historyError, setHistoryError] = useState("");
   const activeStudioJobId = useRef<number | undefined>(undefined);
   const [trustedTailors, setTrustedTailors] = useState<Record<number, TrustedTailorBundle>>({});
   function setTrustedTailor(bundle: TrustedTailorBundle | null) {
@@ -420,6 +422,23 @@ function App() {
     setSelectedEvidenceCardIds([]);
     setEvidenceRecommendations([]);
     setStudioTab("resume");
+  }, [selectedJob?.id]);
+  useEffect(() => {
+    if (!selectedJob) return;
+    let cancelled = false;
+    setHistoryError("");
+    void api.listJobMaterials(selectedJob.id).then(items => {
+      if (cancelled) return;
+      setMaterialHistory(current => ({ ...current, [selectedJob.id]: items }));
+      const latest = items[0];
+      if (!latest) return;
+      if (latest.claims.length) {
+        setTrustedTailors(current => ({ ...current, [selectedJob.id]: current[selectedJob.id] ?? latest }));
+      } else {
+        setTailorBundles(current => ({ ...current, [selectedJob.id]: current[selectedJob.id] ?? latest }));
+      }
+    }).catch(nextError => { if (!cancelled) setHistoryError(toErrorMessage(nextError)); });
+    return () => { cancelled = true; };
   }, [selectedJob?.id]);
   const selectedTailorBlockedMessage = selectedJob ? tailorBlockedMessages[selectedJob.id] : "";
   const selectedApplyPreview = selectedJob ? applyPreviews[selectedJob.id] : undefined;
@@ -560,7 +579,10 @@ function App() {
         api.listEvidenceSources(),
         api.listEvidenceCards()
       ]);
-      const visibleJobs = filterJobsForActiveSearchRun(nextJobs, lastRun?.id ?? null);
+      // Restore the latest persisted search after reload, not an unrelated older job pool.
+      const persistedRunIds = nextJobs.map(job => job.search_run_id).filter((id): id is number => id !== null);
+      const activeRunId = lastRun?.id ?? (persistedRunIds.length ? Math.max(...persistedRunIds) : null);
+      const visibleJobs = filterJobsForActiveSearchRun(nextJobs, activeRunId);
       setResume(nextResume);
       setManualResumeText(nextResume?.raw_text ?? "");
       if (nextResume && !searchFieldsTouched) {
@@ -1610,6 +1632,7 @@ function App() {
       }
       const bundle = await api.generateTrustedTailor(selectedJob.id, resume.id, cardIds);
       setTrustedTailor(bundle);
+      setMaterialHistory(current => ({ ...current, [bundle.job_id]: [bundle, ...(current[bundle.job_id] ?? [])] }));
       setTrustedClaimDrafts(current => ({ ...current, ...Object.fromEntries(bundle.claims.map((claim) => [claim.id, claim.text])) }));
       setEvidenceMessage(
         bundle.generation_mode === "external_ai"
@@ -2922,6 +2945,24 @@ function App() {
         </Panel>
 
         <Panel title="人审材料" kicker="Tailor Review" className="module-panel module-studio review-panel">
+          {historyError ? <p role="alert">历史材料读取失败：{historyError}。请刷新重试，未删除任何旧材料。</p> : null}
+          {selectedJob && materialHistory[selectedJob.id]?.length ? (
+            <label>材料版本
+              <select aria-label="材料版本" value={trustedTailor?.id ?? selectedBundle?.id ?? ""} onChange={event => {
+                const version = materialHistory[selectedJob.id].find(item => item.id === Number(event.target.value));
+                if (!version) return;
+                if (trustedTailor && hasUnsavedClaims(trustedTailor, trustedClaimDrafts) && !window.confirm("有未保存修改，仍要切换材料吗？")) return;
+                if (version.claims.length) {
+                  void api.getTrustedTailor(version.id).then(setTrustedTailor).catch(nextError => setError(toErrorMessage(nextError)));
+                } else {
+                  setTrustedTailors(current => { const next = { ...current }; delete next[selectedJob.id]; return next; });
+                  setTailorBundles(current => ({ ...current, [selectedJob.id]: version }));
+                }
+              }}>
+                {materialHistory[selectedJob.id].map(item => <option key={item.id} value={item.id}>#{item.id} · {item.claims.length ? "证据材料" : "历史材料"} · {formatDateTime(item.created_at)}</option>)}
+              </select>
+            </label>
+          ) : null}
           {trustedTailor ? (
             <div className="trusted-tailor-result">
               <div className="evidence-actions" aria-label="材料视图">
@@ -2933,7 +2974,7 @@ function App() {
               <div className="trusted-result-heading">
                 <div>
                   <span>生成模式</span>
-                  <b>{trustedTailor.generation_mode === "external_ai" ? "外部模型 · 严格证据约束" : "本地安全模式"}</b>
+                  <b>{(trustedTailor.generation_mode ?? trustedTailor.review.generation_mode) === "external_ai" ? "外部模型 · 严格证据约束" : "本地安全模式"}</b>
                 </div>
                 <span className={`truth-badge ${trustedTailor.review.trusted_evidence_finalized ? "pass" : "risk"}`}>
                   {trustedTailor.review.trusted_evidence_finalized ? "已定稿" : "等待逐条核验"}

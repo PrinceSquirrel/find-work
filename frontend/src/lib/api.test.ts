@@ -8,6 +8,12 @@ describe("api client", () => {
     vi.restoreAllMocks();
   });
 
+  test("material history is loaded from the selected job without generating", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as unknown as Response);
+    expect(await api.listJobMaterials(42)).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/jobs/42/materials", expect.not.objectContaining({ method: "POST" }));
+  });
+
   test("listJobs can request jobs for one search run", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
