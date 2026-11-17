@@ -143,8 +143,9 @@ export const api = {
     });
   },
 
-  extractEvidenceCards(sourceId: number): Promise<EvidenceCard[]> {
-    return request<EvidenceCard[]>(`/api/evidence-sources/${encodeURIComponent(sourceId)}/extract-cards`, {
+  extractEvidenceCards(sourceId: number, mode: "configured" | "local" = "configured"): Promise<EvidenceCard[]> {
+    const query = mode === "local" ? "?mode=local" : "";
+    return request<EvidenceCard[]>(`/api/evidence-sources/${encodeURIComponent(sourceId)}/extract-cards${query}`, {
       method: "POST"
     });
   },

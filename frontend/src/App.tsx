@@ -348,6 +348,8 @@ function App() {
   const [selectedEvidenceCardIds, setSelectedEvidenceCardIds] = useState<number[]>([]);
   const evidenceDialog = useRef<HTMLDialogElement>(null);
   const evidenceUploadLock = useRef(false);
+  const evidenceExtractionLock = useRef(false);
+  const workspaceRefreshVersion = useRef(0);
   const studioLock = useRef(false);
   const [studioTab, setStudioTab] = useState<"resume" | "greeting">("resume");
   const [materialHistory, setMaterialHistory] = useState<Record<number, TrustedTailorBundle[]>>({});
@@ -552,6 +554,7 @@ function App() {
   );
 
   async function refreshWorkspace() {
+    const refreshVersion = ++workspaceRefreshVersion.current;
     setBusy((current) => ({ ...current, boot: true }));
     setError(null);
     setFailedAgent(null);
@@ -585,6 +588,7 @@ function App() {
         api.listEvidenceSources(),
         api.listEvidenceCards()
       ]);
+      if (refreshVersion !== workspaceRefreshVersion.current) return;
       // Restore the latest persisted search after reload, not an unrelated older job pool.
       const persistedRunIds = nextJobs.map(job => job.search_run_id).filter((id): id is number => id !== null);
       const activeRunId = lastRun?.id ?? (persistedRunIds.length ? Math.max(...persistedRunIds) : null);
@@ -646,10 +650,11 @@ function App() {
         setModelProfileName(firstProfile.name);
       }
     } catch (nextError) {
+      if (refreshVersion !== workspaceRefreshVersion.current) return;
       setFailedAgent("ResumeParserAgent");
       setError(toErrorMessage(nextError));
     } finally {
-      setBusy((current) => ({ ...current, boot: false }));
+      if (refreshVersion === workspaceRefreshVersion.current) setBusy((current) => ({ ...current, boot: false }));
     }
   }
 
@@ -1477,7 +1482,7 @@ function App() {
 
   async function handleEvidenceUpload(event?: FormEvent) {
     event?.preventDefault();
-    if (evidenceUploadLock.current) return;
+    if (evidenceUploadLock.current || busy.boot) return;
     if (!evidenceFiles.length) {
       setError("请先选择至少一个个人资料文件。");
       return;
@@ -1518,16 +1523,22 @@ function App() {
     }
   }
 
-  async function handleExtractEvidenceCards(source: EvidenceSource) {
+  async function handleExtractEvidenceCards(source: EvidenceSource, mode: "configured" | "local" = "configured") {
+    if (evidenceExtractionLock.current) return;
+    evidenceExtractionLock.current = true;
     setBusy((current) => ({ ...current, evidenceSourceId: source.id }));
     setError(null);
+    setEvidenceMessage(null);
     try {
-      const cards = await api.extractEvidenceCards(source.id);
+      const cards = await api.extractEvidenceCards(source.id, mode);
       await refreshEvidenceLibrary();
-      setEvidenceMessage(`《${source.filename}》已得到 ${cards.length} 张候选卡片，确认前不会参与生成。`);
+      setEvidenceMessage(`《${source.filename}》已得到 ${cards.length} 张候选卡片${mode === "local" ? "（本地原文提取，未调用模型）" : ""}，确认前不会参与生成。`);
     } catch (nextError) {
-      setError(toErrorMessage(nextError));
+      const detail = toErrorMessage(nextError);
+      setError(`资料已上传，卡片提取未完成：${detail}`);
+      setEvidenceMessage(`《${source.filename}》已保存在本地，无需重复上传。${detail} ${mode === "configured" ? "可更新模型连接设置后重试，或选择“本地提取卡片”继续。" : "请检查资料正文后重试。"}`);
     } finally {
+      evidenceExtractionLock.current = false;
       setBusy((current) => ({ ...current, evidenceSourceId: null }));
     }
   }
@@ -2025,7 +2036,7 @@ function App() {
               <button
                 className="primary"
                 type="button"
-                disabled={!evidenceFiles.length || busy.evidenceUpload}
+                disabled={busy.boot || !evidenceFiles.length || busy.evidenceUpload}
                 onClick={() => { evidenceDialog.current?.showModal(); void handleEvidenceUpload(); }}
               >
                 {busy.evidenceUpload ? "上传中..." : "上传并检查资料"}
@@ -2599,7 +2610,7 @@ function App() {
             </div>
           </div>
 
-          {evidenceMessage ? <p className="evidence-message">{evidenceMessage}</p> : null}
+          {evidenceMessage ? <p className="evidence-message" role="status">{evidenceMessage}</p> : null}
 
           <form className="evidence-upload" onSubmit={handleEvidenceUpload}>
             <label className="file-drop evidence-file-drop">
@@ -2612,7 +2623,7 @@ function App() {
               <span>{evidenceFiles.length ? `已选择 ${evidenceFiles.length} 份资料` : "选择个人资料文件"}</span>
               <small>优先支持 DOCX / 可提取文字的 PDF / TXT / MD；扫描件失败后可手工补全文本。</small>
             </label>
-            <button className="primary" type="submit" disabled={busy.evidenceUpload}>
+            <button className="primary" type="submit" disabled={busy.boot || busy.evidenceUpload}>
               {busy.evidenceUpload ? "上传中..." : "加入本地资料库"}
             </button>
           </form>
@@ -2653,13 +2664,19 @@ function App() {
                       保存正文
                     </button>
                   ) : (
+                    <>
                     <button
                       type="button"
-                      disabled={busy.evidenceSourceId === source.id}
+                      disabled={busy.evidenceSourceId !== null}
                       onClick={() => void handleExtractEvidenceCards(source)}
                     >
                       {busy.evidenceSourceId === source.id ? "处理中..." : "提取候选卡片"}
                     </button>
+                    <button className="primary" type="button" disabled={busy.evidenceSourceId !== null} onClick={() => void handleExtractEvidenceCards(source, "local")}>
+                      本地提取卡片
+                    </button>
+                    <button type="button" onClick={() => { evidenceDialog.current?.close(); activateWorkspaceModule("settings"); }}>模型连接设置</button>
+                    </>
                   )}
                   <button
                     className="danger-quiet"
@@ -2757,6 +2774,7 @@ function App() {
                       </span>
                     </div>
                   </header>
+                  {card.user_note ? <small>{card.user_note}</small> : null}
                   <label>
                     <span>卡片标题</span>
                     <input value={draft.title} onChange={(event) => updateEvidenceCardDraft(card, "title", event.target.value)} />

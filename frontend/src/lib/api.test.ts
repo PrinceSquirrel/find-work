@@ -8,6 +8,14 @@ describe("api client", () => {
     vi.restoreAllMocks();
   });
 
+  test("explicit local extraction reuses the saved source without uploading again", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as unknown as Response);
+    await api.extractEvidenceCards(5, "local");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/evidence-sources/5/extract-cards?mode=local", expect.objectContaining({ method: "POST" }));
+    expect(fetchMock.mock.calls[0][1]?.body).toBeUndefined();
+  });
+
   test.each(["Jobs", "Applications"] as const)("bulkDelete%s sends only selected IDs and surfaces failures", async kind => {
     const result = { deleted_ids: [7], protected_ids: [8], missing_ids: [] };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => result } as Response);
