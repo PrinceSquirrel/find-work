@@ -839,4 +839,14 @@ describe("dashboard helpers", () => {
     expect(summary.pageSummary).toBe("平台页面显示已沟通");
     expect(summary.note).toBe("用户备注");
   });
+
+  it("does not treat a note, partial proof or an opened chat as a real submission", () => {
+    const complete = { evidence: "招呼已发送", source_url: "https://www.zhipin.com/job_detail/test.html", confirmed_at: "2026-11-17T10:00:00Z", status: "applied", action: "clicked_apply" };
+    expect(summarizePlatformConfirmation({}, "平台确认：用户手工备注").confirmed).toBe(false);
+    for (const patch of [{ evidence: "" }, { source_url: "" }, { confirmed_at: "" }, { confirmed_at: "invalid" }, { action: "preview" }, { status: "ready" }, { status: "chat_opened_unconfirmed" }]) {
+      expect(summarizePlatformConfirmation({ ...complete, ...patch }, "").confirmed).toBe(false);
+    }
+    expect(summarizePlatformConfirmation(complete, "").confirmed).toBe(true);
+    expect(summarizePlatformConfirmation({ ...complete, status: "already_applied", action: "already_confirmed" }, "").confirmed).toBe(true);
+  });
 });

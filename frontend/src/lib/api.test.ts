@@ -8,6 +8,16 @@ describe("api client", () => {
     vi.restoreAllMocks();
   });
 
+  test.each(["Jobs", "Applications"] as const)("bulkDelete%s sends only selected IDs and surfaces failures", async kind => {
+    const result = { deleted_ids: [7], protected_ids: [8], missing_ids: [] };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => result } as Response);
+    const remove = kind === "Jobs" ? api.bulkDeleteJobs : api.bulkDeleteApplications;
+    expect(await remove([7, 8])).toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/${kind.toLowerCase()}/bulk-delete`, expect.objectContaining({ method: "POST", body: JSON.stringify({ ids: [7, 8], confirmed: true }) }));
+    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({ detail: "删除失败，请重试" }) } as Response);
+    await expect(remove([7])).rejects.toThrow("删除失败，请重试");
+  });
+
   test("material history is loaded from the selected job without generating", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as unknown as Response);
     expect(await api.listJobMaterials(42)).toEqual([]);

@@ -88,6 +88,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+export type BulkDeleteResult = { deleted_ids: number[]; protected_ids: number[]; missing_ids: number[] };
+
 export const api = {
   uploadResume(file: File): Promise<ResumeDraft> {
     const formData = new FormData();
@@ -228,6 +230,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     });
+  },
+
+  bulkDeleteJobs(ids: number[]): Promise<BulkDeleteResult> {
+    return request<BulkDeleteResult>("/api/jobs/bulk-delete", { method: "POST", body: JSON.stringify({ ids, confirmed: true }) });
+  },
+
+  bulkDeleteApplications(ids: number[]): Promise<BulkDeleteResult> {
+    return request<BulkDeleteResult>("/api/applications/bulk-delete", { method: "POST", body: JSON.stringify({ ids, confirmed: true }) });
   },
 
   listJobs(searchRunId?: number): Promise<JobPosting[]> {

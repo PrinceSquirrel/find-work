@@ -811,10 +811,11 @@ export function summarizePlatformConfirmation(
   const pageSummary = stringValue(proof?.page_summary);
   const buttonText = stringValue(proof?.button_text);
   if (!evidence && !sourceUrl && !confirmedAt && !status && !pageSummary && !buttonText) {
-    return legacy;
+    return { ...legacy, confirmed: false };
   }
   return {
-    confirmed: true,
+    confirmed: Boolean(evidence && sourceUrl && confirmedAt && !Number.isNaN(Date.parse(confirmedAt)) &&
+      ["applied", "already_applied"].includes(status) && ["clicked_apply", "already_confirmed"].includes(stringValue(proof?.action))),
     evidence: evidence || pageSummary || status || legacy.evidence,
     sourceUrl: sourceUrl || legacy.sourceUrl,
     note: legacy.note,

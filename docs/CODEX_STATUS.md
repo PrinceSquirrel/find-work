@@ -3368,3 +3368,9 @@ Updated: 2026-07-03 Asia/Shanghai
 - 存储层要求平台、URL、证据、确认时间、成功状态与动作完整。对同一岗位重复确认沿用原记录，避免重复入库；新记录事务内检查岗位仍存在。
 - 测试直接执行生成的浏览器 JavaScript，覆盖空聊天框、招呼已发送、简历投递成功、验证拦截、无响应；覆盖不完整证明、重复确认。自动测试使用模拟页面，不操作用户平台。
 - 全量后端 143、前端 64 项及 lint/build、diff 检查通过。提交信息 fix: persist only confirmed platform contact records；前端批选与删除按钮仍待完成。
+
+### 客户端接口与证明标识阶段
+
+- 真实入库阶段 40bc98ab72d864ca0633bebf846228c2b449ceee 已推送且远端一致。
+- 五文件：lib/api.ts、lib/api.test.ts、lib/dashboard.ts、lib/dashboard.test.ts、本文件。客户端批删发送明确 ID 与确认字段，失败向页面传递；确认标识要求成功状态、动作、证据、来源和有效时间，旧备注/部分证明不当作成功。
+- 全量后端 143、前端 67 项通过，lint/build、diff 检查通过。提交信息 feat: connect bulk deletion client and strict proof labels；下一阶段加入两页选择栏和删除交互。
