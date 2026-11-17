@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -168,6 +168,11 @@ class ApplicationPlatformProof(BaseModel):
     button_text: str = ""
     confirmed_at: datetime | None = None
     page_summary: str = ""
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[Annotated[int, Field(strict=True, gt=0)]] = Field(min_length=1, max_length=1000)
+    confirmed: Literal[True]
 
 
 class ApplicationRecord(BaseModel):

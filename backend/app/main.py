@@ -16,6 +16,7 @@ from app.schemas import (
     ApplyRecordRequest,
     BrowserJobExtractRequest,
     BrowserJobSearchRequest,
+    BulkDeleteRequest,
     EvidenceCardCreate,
     EvidenceCardUpdate,
     EvidenceSourceManualTextRequest,
@@ -542,6 +543,14 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     def sync_applications(payload: ApplicationSyncRequest | None = None):
         request = payload or ApplicationSyncRequest()
         return ApplicationSyncService(app.state.service.store).sync(request.platforms, request.limit)
+
+    @app.post("/api/jobs/bulk-delete")
+    def delete_jobs(payload: BulkDeleteRequest):
+        return app.state.service.store.bulk_delete_records("jobs", payload.ids)
+
+    @app.post("/api/applications/bulk-delete")
+    def delete_applications(payload: BulkDeleteRequest):
+        return app.state.service.store.bulk_delete_records("applications", payload.ids)
 
     @app.get("/api/applications")
     def list_applications():

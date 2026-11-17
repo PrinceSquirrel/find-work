@@ -1690,6 +1690,51 @@ class SQLiteStore:
             )
         return self.get_application(application_id)
 
+    def _delete_source_index(self, conn: sqlite3.Connection, source_type: str, ids: list[int]) -> None:
+        if not ids:
+            return
+        marks = ",".join("?" for _ in ids)
+        for table in ("knowledge_chunks_fts", "knowledge_chunks", "knowledge_documents"):
+            conn.execute(
+                f"DELETE FROM {table} WHERE source_type = ? AND source_id IN ({marks})",
+                [source_type, *(str(item) for item in ids)],
+            )
+
+    def bulk_delete_records(self, kind: str, ids: list[int]) -> dict[str, list[int]]:
+        if kind not in {"jobs", "applications"}:
+            raise ValueError("Unsupported record collection")
+        requested = sorted(set(ids))
+        if not requested or len(requested) > 1000:
+            raise ValueError("Select between 1 and 1000 records")
+        marks = ",".join("?" for _ in requested)
+        # Lock before checking linked records so a concurrent confirmed application is preserved.
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            found = {row["id"] for row in conn.execute(f"SELECT id FROM {kind} WHERE id IN ({marks})", requested)}
+            protected = set()
+            if kind == "jobs":
+                protected = {row["job_id"] for row in conn.execute(
+                    f"SELECT DISTINCT job_id FROM applications WHERE job_id IN ({marks})", requested,
+                )}
+            deleted = sorted(found - protected)
+            if deleted:
+                deletion_marks = ",".join("?" for _ in deleted)
+                if kind == "jobs":
+                    material_ids = [row["id"] for row in conn.execute(
+                        f"SELECT id FROM tailored_resumes WHERE job_id IN ({deletion_marks})", deleted,
+                    )]
+                    conn.execute(
+                        f"DELETE FROM tailored_claims WHERE tailored_resume_id IN (SELECT id FROM tailored_resumes WHERE job_id IN ({deletion_marks}))", deleted,
+                    )
+                    conn.execute(f"DELETE FROM tailored_resumes WHERE job_id IN ({deletion_marks})", deleted)
+                    self._delete_source_index(conn, "tailored_resume", material_ids)
+                    self._delete_source_index(conn, "job", deleted)
+                else:
+                    conn.execute(f"DELETE FROM application_events WHERE application_id IN ({deletion_marks})", deleted)
+                    self._delete_source_index(conn, "application", deleted)
+                conn.execute(f"DELETE FROM {kind} WHERE id IN ({deletion_marks})", deleted)
+        return {"deleted_ids": deleted, "protected_ids": sorted(found & protected), "missing_ids": sorted(set(requested) - found)}
+
     def list_applications(self) -> list[ApplicationRecord]:
         with self._connect() as conn:
             rows = conn.execute("SELECT id FROM applications ORDER BY applied_at DESC").fetchall()
