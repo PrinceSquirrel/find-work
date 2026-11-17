@@ -35,6 +35,19 @@
 
 最终品牌文件位于 `outputs/squirrel-world-logo-20260903/`：`squirrel-world-logo-v2.svg` 是可继续编辑的分层矢量源文件，`squirrel-world-logo-v2.png` 和 `squirrel-world-logo-v2-512.png` 是透明背景 PNG 导出。
 
+## 批量清理岗位与投递记录
+
+“岗位雷达”和“投递跟踪”均提供行勾选、全选当前结果、取消选择及批量删除，删除前明确确认数量。岗位筛选隐藏的勾选不会被删除，一次最多 1000 条。
+
+- 岗位清理会保留已关联投递记录的岗位；未关联岗位删除时，其生成材料、引用和检索索引一并清理，资料库原文件保留。
+- 投递跟踪可“选择待核对记录”快捷勾选缺少完整平台证明的旧记录，请先核对是否真实发送再删除。确认删除会移除所选本地投递、事件和索引，不撤销招聘平台上的招呼或投递；未勾选的记录保留。
+- 新投递只在平台确认“已发送招呼/已投递”后保存。预检、打开聊天框、生成材料和手工备注均不能创建投递；重复确认同一岗位沿用原记录。旧数据不会因缺少证明而自动删除。
+- 删除失败会保留勾选供重试，成功后更新列表及统计，刷新页面不会恢复已删除记录。
+
+接口为 `POST /api/jobs/bulk-delete`、`POST /api/applications/bulk-delete`，请求体示例 `{"ids":[1,2],"confirmed":true}`。响应包含 `deleted_ids`、`protected_ids`、`missing_ids`。相关后端测试位于 `backend/tests/test_bulk_records.py`，前端组件测试位于 `frontend/src/BulkRecordActions.test.tsx`。
+
+独立浏览器回归：项目正常启动后，另开终端执行 `.\.venv\Scripts\python.exe scripts/serve_bulk_delete_check.py`，看到 8766 端口就绪后，用上述 Playwright 会话执行 `run-code --filename scripts/check-bulk-deletion.js`。所有 API 请求都转至临时数据库，测试前校验服务身份；不删除用户数据，不访问真实招聘平台、不调用模型。重复测试需先停止并重新启动临时服务以重建测试数据。
+
 ## 可信经历资料库（AI 产品经理作品集 MVP）
 
 生成中心统一使用可信闭环：用户上传分散的个人材料，系统提取候选经历卡片；只有用户确认过的卡片才能参与针对完整 JD 的推荐和生成。每条生成内容必须关联有效卡片，用户编辑后会重新变为待核验，核验并定稿后才能导出最终简历。普通生成的旧接口和历史数据保留兼容。
