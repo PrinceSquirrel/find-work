@@ -74,26 +74,31 @@ class EvidenceService:
             raise EvidenceConflictError("该资料已经生成经历卡片，请先删除卡片或重新上传资料")
         return self.store.update_evidence_source_manual_text(source_id, raw_text)
 
-    def extract_cards(self, source_id: int) -> list[EvidenceCard]:
+    def extract_cards(self, source_id: int, mode: str = "configured") -> list[EvidenceCard]:
+        if mode not in {"configured", "local"}:
+            raise ValueError("提取模式只能为 configured 或 local")
         source = self.store.get_evidence_source(source_id)
         existing = self.store.list_evidence_cards(source_id=source_id)
         if existing:
             return existing
         if source.manual_text_required or not source.raw_text.strip():
             raise EvidenceConflictError("资料没有可用正文，请先补全文本再提取经历卡片")
-        config = self.store.get_agent_model_route("ApplicationWriterAgent")
-        route = self.model_router.route_for_agent("ApplicationWriterAgent", config)
-        if route.mode == "external":
-            try:
-                result = self.llm_client.generate_evidence_cards(config, source)
-                candidates = self._cards_from_llm(source, result.content)
-                self._record_llm_usage("EvidenceCardAgent", result, config)
-            except Exception as exc:
-                if isinstance(exc, EvidenceModelError):
-                    raise
-                raise EvidenceModelError(f"经历卡片模型调用失败：{self._safe_error(exc)}") from exc
-        else:
+        if mode == "local":
             candidates = self._local_candidate_cards(source)
+        else:
+            config = self.store.get_agent_model_route("ApplicationWriterAgent")
+            route = self.model_router.route_for_agent("ApplicationWriterAgent", config)
+            if route.mode == "external":
+                try:
+                    result = self.llm_client.generate_evidence_cards(config, source)
+                    candidates = self._cards_from_llm(source, result.content)
+                    self._record_llm_usage("EvidenceCardAgent", result, config)
+                except Exception as exc:
+                    if isinstance(exc, EvidenceModelError):
+                        raise
+                    raise EvidenceModelError(f"经历卡片模型调用失败：{self._safe_error(exc)}") from exc
+            else:
+                candidates = self._local_candidate_cards(source)
         cards = [self.store.create_evidence_card(card) for card in candidates]
         if not cards:
             raise ValueError("没有识别到足够完整的经历片段，请手工新增经历卡片")
@@ -340,6 +345,7 @@ class EvidenceService:
                     source_start=start,
                     source_end=start + len(paragraph),
                     quote_verified=True,
+                    user_note="本地原文提取草稿，未调用模型，需用户核对确认",
                 )
             )
         return cards

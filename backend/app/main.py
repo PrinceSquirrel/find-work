@@ -4,7 +4,7 @@ import html
 import json
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -291,9 +291,9 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/evidence-sources/{source_id}/extract-cards", status_code=201)
-    def extract_evidence_cards(source_id: int):
+    def extract_evidence_cards(source_id: int, mode: Literal["configured", "local"] = "configured"):
         try:
-            return app.state.evidence_service.extract_cards(source_id)
+            return app.state.evidence_service.extract_cards(source_id, mode=mode)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except EvidenceConflictError as exc:

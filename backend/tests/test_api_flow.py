@@ -14,6 +14,7 @@ from app.schemas import ApplicationPlatformProof, ExtractedJobCandidate, Platfor
 from app.services import browser_job_extractor_service
 from app.services import job_application_service
 from app.services import platform_session_service
+from app.services.llm_client_service import LLMClientUnavailable
 
 
 @pytest.fixture(autouse=True)
@@ -2628,6 +2629,41 @@ def test_material_history_preserves_legacy_results_and_job_isolation(tmp_path):
     other_jobs = [job for job in client.get("/api/jobs").json() if job["id"] != job_id]
     assert other_jobs
     assert client.get(f"/api/jobs/{other_jobs[0]['id']}/materials").json() == []
+
+
+def test_uploaded_source_survives_auth_failure_and_explicit_local_recovery(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_BUSINESS_TEST_API_KEY", "test-not-a-real-key")
+    app = create_app(db_path=tmp_path / "upload-recovery.sqlite3")
+    client = TestClient(app)
+    _enable_external_writer_route(client)
+    text = "项目：本地资料库，负责需求分析与 Python 接口开发。"
+    source = client.post("/api/evidence-sources", files={"file": ("project.txt", text.encode(), "text/plain")}).json()
+    calls = []
+    def denied(config, document):
+        calls.append(document.id)
+        raise LLMClientUnavailable("模型认证失败，Key 无效（HTTP 401）")
+    app.state.evidence_service.llm_client.generate_evidence_cards = denied
+    response = client.post(f"/api/evidence-sources/{source['id']}/extract-cards")
+    assert response.status_code == 502 and "HTTP 401" in response.json()["detail"]
+    assert client.get("/api/evidence-sources").json()[0]["raw_text"] == text
+    assert client.get("/api/evidence-cards").json() == []
+    cards = client.post(f"/api/evidence-sources/{source['id']}/extract-cards?mode=local")
+    assert cards.status_code == 201
+    assert calls == [source["id"]]
+    for card in cards.json():
+        assert card["status"] == "draft" and card["quote_verified"] is True
+        assert card["source_quote"] in text
+        assert "未调用模型" in card["user_note"]
+    repeated = client.post(f"/api/evidence-sources/{source['id']}/extract-cards?mode=local")
+    assert [card["id"] for card in repeated.json()] == [card["id"] for card in cards.json()]
+
+
+def test_local_extraction_requires_readable_source_and_valid_mode(tmp_path):
+    client = TestClient(create_app(db_path=tmp_path / "empty-source.sqlite3"))
+    source = client.post("/api/evidence-sources", files={"file": ("scan.png", _one_pixel_png(), "image/png")}).json()
+    assert client.post(f"/api/evidence-sources/{source['id']}/extract-cards?mode=local").status_code == 409
+    assert client.post(f"/api/evidence-sources/{source['id']}/extract-cards?mode=unknown").status_code == 422
+    assert client.get("/api/evidence-cards").json() == []
 
 
 def test_trusted_evidence_library_end_to_end_requires_claim_review(tmp_path):

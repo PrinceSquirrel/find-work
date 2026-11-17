@@ -3403,3 +3403,11 @@ Updated: 2026-07-03 Asia/Shanghai
 - 第一阶段三文件：llm_client_service.py、test_llm_request_errors.py、本文件。集中转换错误为可操作提示，保留 HTTP 状态，区分认证/额度/限流/网络；不暴露服务商原始响应、Key 或个人文本。
 - 后端全量 153、前端 72 项通过，lint/build、diff 检查通过。提交信息 fix: explain model request failures without exposing secrets，提交后立即推送核对。
 - 下一阶段提供显式本地原文提取，不静默伪装模型成功；AI 提取恢复仍需要用户在系统设置中更新有效 DeepSeek Key。故障排查使用 API troubleshooting 流程，没有创建或替换密钥。
+
+### 显式本地提取恢复阶段
+
+- 错误提示提交 a9dc74abef7895e4f1796eb40d3293f0896987bf 已推送且远端一致。
+- 五文件：main.py、evidence_service.py、test_api_flow.py、README.md、本文件。extract-cards 增加 mode=local，绕开模型配置与外部请求，直接从已保存正文提取；默认 configured 保留原行为，模型错误不静默降级。
+- 本地卡片保留原文定位、标记未调用模型和 draft，仍需人工确认；没有正文时拒绝处理，非法 mode 拒绝，重复提取复用已有卡片。
+- 回归覆盖上传成功→模型 401→原资料保留→显式本地恢复成功；初测修正了异常模拟的导入位置，随后全量后端 155、前端 72 项及 lint/build、diff 检查全部通过。
+- 提交信息 feat: allow explicit local extraction when model access fails；接下来接入按钮和资料已保存提示，验证浏览器恢复流程。
