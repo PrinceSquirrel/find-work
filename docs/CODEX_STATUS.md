@@ -3374,3 +3374,11 @@ Updated: 2026-07-03 Asia/Shanghai
 - 真实入库阶段 40bc98ab72d864ca0633bebf846228c2b449ceee 已推送且远端一致。
 - 五文件：lib/api.ts、lib/api.test.ts、lib/dashboard.ts、lib/dashboard.test.ts、本文件。客户端批删发送明确 ID 与确认字段，失败向页面传递；确认标识要求成功状态、动作、证据、来源和有效时间，旧备注/部分证明不当作成功。
 - 全量后端 143、前端 67 项通过，lint/build、diff 检查通过。提交信息 feat: connect bulk deletion client and strict proof labels；下一阶段加入两页选择栏和删除交互。
+
+### 页面批选与删除阶段
+
+- 接口客户端提交 634f1696b8c0819d276de904ca9efb1ef3558e70 已推送且远端一致。
+- 五文件：App.tsx、styles.css、BulkRecordActions.tsx、BulkRecordActions.test.tsx、本文件。两页加入行勾选、当前结果全选/取消、计数、删除确认和失败重试；投递页可快捷选择待核对记录。
+- 岗位只选择未关联投递的项，筛选隐藏的勾选不进入删除请求；删除后移除对应结果缓存/同步建议，刷新统计，避免陈旧结果回显。删除锁防重复请求，失败保留选择。
+- 全量后端 143、前端 72 项、lint/build、diff 检查通过。只读浏览器全站回归通过两种桌面尺寸、手机布局、主题及高亮；未触碰用户真实记录。
+- 提交信息 feat: add bulk selection and deletion to job and application pages。下一阶段以独立临时数据库验证浏览器实际删除/取消/失败/统计/刷新流程，并重载用户项目后端使新接口生效。

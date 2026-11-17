@@ -22,6 +22,29 @@
   --shadow: 0 18px 50px rgba(37, 32, 21, 0.1);
 }
 
+.bulk-record-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--green-soft);
+  font-size: 12px;
+}
+.bulk-select-all, .record-heading { display: flex; align-items: center; gap: 8px; }
+.bulk-select-all { cursor: pointer; white-space: nowrap; }
+.record-checkbox { width: 16px; height: 16px; min-height: 16px; padding: 0; flex: 0 0 16px; accent-color: var(--green); }
+.record-heading .job-title { flex: 1; min-width: 0; }
+.bulk-selection-count { color: var(--green-deep); margin-right: auto; }
+.bulk-record-actions button { min-height: 30px; padding: 5px 9px; font-size: 12px; }
+.bulk-record-actions .bulk-delete-button { color: var(--red); border-color: rgba(167, 71, 56, .4); background: #fff6ec; }
+.bulk-record-actions small, .record-retained { color: var(--muted); font-size: 11px; }
+.bulk-action-message { flex-basis: 100%; margin: 0; color: var(--green-deep); overflow-wrap: anywhere; }
+
 * {
   box-sizing: border-box;
 }

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApplicationFilterPreview, ApplicationPaginationPreview } from "./ApplicationTrackingControls";
+import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
 import { api, getTailorBlockedMessage } from "./lib/api";
 import { uploadEvidenceBatch } from "./lib/evidenceUpload";
 import { canExportTrusted, chooseConfirmedCards, hasUnsavedClaims, saveJobResult } from "./lib/studio";
@@ -359,6 +360,11 @@ function App() {
   const [trustedClaimDrafts, setTrustedClaimDrafts] = useState<Record<number, string>>({});
   const [evidenceMessage, setEvidenceMessage] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
+  const [selectedJobIds, setSelectedJobIds] = useState<number[]>([]);
+  const [selectedApplicationIds, setSelectedApplicationIds] = useState<number[]>([]);
+  const [deletingRecords, setDeletingRecords] = useState<"jobs" | "applications" | null>(null);
+  const [deletionMessages, setDeletionMessages] = useState({ jobs: "", applications: "" });
+  const recordDeletionLock = useRef(false);
   const [detailJobId, setDetailJobId] = useState<number | null>(null);
   const [lastRun, setLastRun] = useState<SearchRun | null>(null);
   const [searchMode, setSearchMode] = useState<SearchMode>("browser_cdp");
@@ -644,6 +650,49 @@ function App() {
       setError(toErrorMessage(nextError));
     } finally {
       setBusy((current) => ({ ...current, boot: false }));
+    }
+  }
+
+  async function handleBulkDelete(kind: "jobs" | "applications", ids: number[]) {
+    if (recordDeletionLock.current || !ids.length || ids.length > 1000) return;
+    const warning = kind === "jobs"
+      ? `删除选中的 ${ids.length} 条未联系岗位及其生成材料？已有投递记录关联的岗位将自动保留。资料库原文件不受影响。`
+      : `永久删除选中的 ${ids.length} 条本地投递记录及状态事件？真实打过招呼或投递过简历的记录也会被移除，请确认勾选无误。这不会撤销平台上的招呼或投递。`;
+    if (!window.confirm(warning)) return;
+    recordDeletionLock.current = true;
+    setDeletingRecords(kind);
+    setDeletionMessages(current => ({ ...current, [kind]: "正在删除，请稍候…" }));
+    try {
+      const result = await (kind === "jobs" ? api.bulkDeleteJobs(ids) : api.bulkDeleteApplications(ids));
+      const removed = [...result.deleted_ids, ...result.missing_ids];
+      if (kind === "jobs") {
+        setJobs(current => current.filter(job => !removed.includes(job.id)));
+        setSelectedJobIds(current => current.filter(id => !ids.includes(id)));
+        setSelectedJobId(current => current !== null && removed.includes(current) ? null : current);
+        setDetailJobId(current => current !== null && removed.includes(current) ? null : current);
+        setTailorBundles(current => removeRecordKeys(current, removed));
+        setTrustedTailors(current => removeRecordKeys(current, removed));
+        setMaterialHistory(current => removeRecordKeys(current, removed));
+        setApplyPreviews(current => removeRecordKeys(current, removed));
+      } else {
+        setApplications(current => current.filter(record => !removed.includes(record.id)));
+        setSelectedApplicationIds(current => current.filter(id => !ids.includes(id)));
+        setSyncProposals(current => current.filter(item => !removed.includes(item.application_id)));
+        setStatusDrafts(current => removeRecordKeys(current, removed));
+        setStatusNotes(current => removeRecordKeys(current, removed));
+      }
+      const message = `已删除 ${result.deleted_ids.length} 条。${result.protected_ids.length ? `保留 ${result.protected_ids.length} 条关联投递的岗位。` : ""}${result.missing_ids.length ? `${result.missing_ids.length} 条此前已不存在。` : ""}`;
+      setDeletionMessages(current => ({ ...current, [kind]: message }));
+      try {
+        await refreshOutcomeData();
+      } catch {
+        setDeletionMessages(current => ({ ...current, [kind]: `${message} 统计刷新失败，请刷新页面；删除已成功，无需重复提交。` }));
+      }
+    } catch (nextError) {
+      setDeletionMessages(current => ({ ...current, [kind]: `删除未完成：${toErrorMessage(nextError)}。已保留勾选，可重试。` }));
+    } finally {
+      recordDeletionLock.current = false;
+      setDeletingRecords(null);
     }
   }
 
@@ -2816,6 +2865,10 @@ function App() {
 
       <section className="table-layout">
         <Panel title="岗位筛选表" kicker="Job Pool" className="module-panel module-jobs jobs-panel">
+          <BulkRecordActions label="岗位" available={rankedJobs.filter(job => !applicationsByJob.has(job.id)).map(job => job.id)} selected={selectedJobIds} onChange={setSelectedJobIds}
+            onDelete={ids => handleBulkDelete("jobs", ids)} protectedCount={rankedJobs.filter(job => applicationsByJob.has(job.id)).length}
+            busy={deletingRecords !== null || busy.boot || busy.search || busy.extract || busy.applyJobId !== null || busy.trustedTailorJobId !== null}
+            message={deletionMessages.jobs} />
           <div className="toolbar">
             <label>
               平台
@@ -2882,10 +2935,16 @@ function App() {
                     onClick={() => setSelectedJobId(job.id)}
                   >
                     <div>
+                      <div className="record-heading">
+                      <RecordCheckbox label={`选择岗位 #${job.id} ${job.title}`} checked={!application && selectedJobIds.includes(job.id)}
+                        disabled={Boolean(application) || deletingRecords !== null || busy.applyJobId !== null || busy.trustedTailorJobId !== null}
+                        onChange={() => setSelectedJobIds(current => toggleRecord(current, job.id))} />
                       <div className="job-title">
                         <b>{job.title}</b>
                         <span>{PLATFORM_LABELS[job.platform] ?? job.platform}</span>
                       </div>
+                      </div>
+                      {application ? <small className="record-retained">已有关联投递记录，清理岗位时保留</small> : null}
                       <p>{job.company} · {job.city} · {job.salary}</p>
                       <small>{job.description}</small>
                     </div>
@@ -2908,19 +2967,19 @@ function App() {
                       <button type="button" onClick={(event) => { event.stopPropagation(); setDetailJobId(job.id); }}>
                         查看要求
                       </button>
-                      <button type="button" onClick={(event) => { event.stopPropagation(); void handleTailor(job); }}>
+                      <button type="button" disabled={deletingRecords !== null} onClick={(event) => { event.stopPropagation(); void handleTailor(job); }}>
                         {busy.tailorJobId === job.id ? "生成中" : tailorBundles[job.id] ? "重新生成" : "生成材料"}
                       </button>
                       <button
                         type="button"
-                        disabled={Boolean(application) || busy.applyJobId === job.id}
+                        disabled={Boolean(application) || busy.applyJobId === job.id || deletingRecords !== null}
                         onClick={(event) => {
                           event.stopPropagation();
                           void (applyPreview?.ready ? handleConfirmPlatformApply(job) : handleApplyPreview(job));
                         }}
                       >
                         {application
-                          ? "平台已确认"
+                          ? summarizePlatformConfirmation(application.platform_proof, application.latest_note).confirmed ? "平台已确认" : "已有记录待核对"
                           : busy.applyJobId === job.id
                             ? "平台检查中"
                             : applyPreview?.ready
@@ -3241,6 +3300,10 @@ function App() {
       <section className="analytics-layout">
         <Panel title="投递结果表" kicker="Applications" className="module-panel module-applications applications-panel">
           <ApplicationFilterPreview />
+          <BulkRecordActions label="投递记录" available={applications.map(record => record.id)} selected={selectedApplicationIds} onChange={setSelectedApplicationIds}
+            onDelete={ids => handleBulkDelete("applications", ids)} busy={deletingRecords !== null || busy.boot || busy.syncApplications || busy.updateApplicationId !== null || busy.applyJobId !== null}
+            suggestion={{ label: "选择待核对记录", ids: applications.filter(record => !summarizePlatformConfirmation(record.platform_proof, record.latest_note).confirmed).map(record => record.id) }}
+            message={deletionMessages.applications} />
           <div className="sync-console">
             <div>
               <b>投递状态只读同步</b>
@@ -3249,7 +3312,7 @@ function App() {
             <button
               type="button"
               onClick={() => void handleSyncApplications()}
-              disabled={busy.syncApplications || applications.length === 0}
+              disabled={busy.syncApplications || applications.length === 0 || deletingRecords !== null}
             >
               {busy.syncApplications ? "同步中..." : "同步投递状态"}
             </button>
@@ -3327,7 +3390,11 @@ function App() {
                 return (
                   <article className="table-row" key={application.id}>
                     <div>
-                      <b>{application.company}</b>
+                      <div className="record-heading">
+                        <RecordCheckbox label={`选择记录 #${application.id} ${application.company}`} checked={selectedApplicationIds.includes(application.id)} disabled={deletingRecords !== null}
+                          onChange={() => setSelectedApplicationIds(current => toggleRecord(current, application.id))} />
+                        <b>{application.company}</b>
+                      </div>
                       <p>{application.title} · {PLATFORM_LABELS[application.platform] ?? application.platform}</p>
                       <small>投递于 {formatDateTime(application.applied_at)}</small>
                     </div>
@@ -3362,7 +3429,7 @@ function App() {
                       <select
                         aria-label={`${application.title}的下一状态`}
                         value={statusDrafts[application.id] ?? ""}
-                        disabled={nextStatuses.length === 0}
+                        disabled={nextStatuses.length === 0 || deletingRecords !== null}
                         onChange={(event) =>
                           setStatusDrafts((current) => ({
                             ...current,
@@ -3379,6 +3446,7 @@ function App() {
                       </select>
                       <input
                         aria-label={`${application.title}的状态备注`}
+                        disabled={deletingRecords !== null}
                         value={statusNotes[application.id] ?? ""}
                         onChange={(event) =>
                           setStatusNotes((current) => ({
@@ -3390,7 +3458,7 @@ function App() {
                       />
                       <button
                         type="button"
-                        disabled={nextStatuses.length === 0 || busy.updateApplicationId === application.id}
+                        disabled={nextStatuses.length === 0 || busy.updateApplicationId === application.id || deletingRecords !== null}
                         onClick={() => void handleStatusUpdate(application)}
                       >
                         {busy.updateApplicationId === application.id ? "更新中" : "更新"}
