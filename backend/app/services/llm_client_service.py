@@ -16,6 +16,36 @@ class LLMClientUnavailable(RuntimeError):
     """Raised when the configured external LLM cannot be called safely."""
 
 
+def request_failure(exc: Exception) -> LLMClientUnavailable:
+    """Keep actionable status information without returning provider bodies or credentials."""
+    if isinstance(exc, HTTPError):
+        code = ""
+        if exc.code == 429:
+            try:
+                error = json.loads(exc.read(16384)).get("error", {})
+                code = str(error.get("code", "")).lower()
+            except (ValueError, TypeError, AttributeError, OSError):
+                pass
+        if exc.code == 401:
+            hint = "模型认证失败：API Key 无效或已失效，请到系统设置更新该服务商的 Key。"
+        elif exc.code == 402 or code in {"insufficient_quota", "insufficient_balance"}:
+            hint = "模型账户余额或额度不足，请在服务商账户检查余额和用量限制。"
+        elif exc.code == 403:
+            hint = "当前账户无权访问该模型，请检查服务商、模型权限和 Key 所属账户。"
+        elif exc.code == 429:
+            hint = "模型请求过于频繁，请稍后重试。"
+        elif exc.code in {400, 404}:
+            hint = "模型地址、名称或请求参数不被服务商接受，请检查系统设置。"
+        elif exc.code >= 500:
+            hint = "模型服务暂时异常，请稍后重试；已上传资料仍保存在本地。"
+        else:
+            hint = "模型服务拒绝请求，请检查模型连接设置。"
+        return LLMClientUnavailable(f"{hint}（HTTP {exc.code}）")
+    if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+        return LLMClientUnavailable("模型请求超时，请稍后重试或检查系统设置中的超时时间。")
+    return LLMClientUnavailable("无法连接模型服务，请检查服务地址、网络或代理；已上传资料仍保存在本地。")
+
+
 @dataclass(frozen=True)
 class LLMCompletionResult:
     content: str
@@ -58,7 +88,7 @@ class OpenAICompatibleClient:
             with urlopen(request, timeout=config.timeout_ms / 1000) as response:
                 raw = response.read().decode("utf-8")
         except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            raise LLMClientUnavailable(f"LLM request failed: {exc.__class__.__name__}") from exc
+            raise request_failure(exc) from exc
         duration_ms = max(1, int((perf_counter() - started) * 1000))
         try:
             payload = json.loads(raw)
@@ -109,7 +139,7 @@ class OpenAICompatibleClient:
             with urlopen(request, timeout=config.timeout_ms / 1000) as response:
                 raw = response.read().decode("utf-8")
         except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            raise LLMClientUnavailable(f"LLM request failed: {exc.__class__.__name__}") from exc
+            raise request_failure(exc) from exc
         duration_ms = max(1, int((perf_counter() - started) * 1000))
         return self._parse_response(config, prompt, raw, duration_ms)
 
@@ -175,7 +205,7 @@ class OpenAICompatibleClient:
             with urlopen(request, timeout=config.timeout_ms / 1000) as response:
                 raw = response.read().decode("utf-8")
         except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            raise LLMClientUnavailable(f"LLM request failed: {exc.__class__.__name__}") from exc
+            raise request_failure(exc) from exc
         duration_ms = max(1, int((perf_counter() - started) * 1000))
         return self._parse_response(config, prompt, raw, duration_ms)
 
@@ -224,7 +254,7 @@ class OpenAICompatibleClient:
             with urlopen(request, timeout=config.timeout_ms / 1000) as response:
                 raw = response.read().decode("utf-8")
         except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            raise LLMClientUnavailable(f"LLM request failed: {exc.__class__.__name__}") from exc
+            raise request_failure(exc) from exc
         duration_ms = max(1, int((perf_counter() - started) * 1000))
         return self._parse_response(config, prompt, raw, duration_ms)
 

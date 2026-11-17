@@ -3393,3 +3393,13 @@ Updated: 2026-07-03 Asia/Shanghai
 - 已核对用户项目后端进程与空闲状态后重载，8000 的 OpenAPI 已包含两个 bulk-delete 接口，5173 /api/health 为 ok；启动 PID 已更新，仅运行时文件未纳入 Git。
 - 使用：刷新 http://127.0.0.1:5173/，在岗位雷达或投递跟踪勾选/全选后批量删除。旧记录缺乏证明不代表虚假，保留让用户核对；可快捷选择待核对项后确认清理。后续新投递只凭平台成功信号入库。
 - 本阶段提交信息 test: verify bulk deletion workflows with isolated data；提交后立即推送、校验远端 HEAD。所有阶段均按要求独立提交同步，用户文件和 output/ 测试数据不提交。本次无剩余实现事项。
+
+## 2026-11-17：资料上传后的模型提取报错
+
+状态：in_progress。用户截图提示“经历卡片模型调用失败：LLM request failed: HTTPError”。
+
+- 真实调用链：POST evidence-sources 已返回 201；POST evidence-sources/{id}/extract-cards 进入 EvidenceService → ApplicationWriterAgent 模型路由 → DeepSeek /chat/completions 后返回 502。
+- 只读取当前配置的非敏感字段，使用已有配置做不含个人资料的最小连通请求：沙箱网络失败后经允许重试，服务商明确返回 HTTP 401 authentication_error，当前 Key 无效。现有 DOCX 已解析成功、正文 1358 字符；不是文件上传失败。未修改 .env 或密钥。
+- 第一阶段三文件：llm_client_service.py、test_llm_request_errors.py、本文件。集中转换错误为可操作提示，保留 HTTP 状态，区分认证/额度/限流/网络；不暴露服务商原始响应、Key 或个人文本。
+- 后端全量 153、前端 72 项通过，lint/build、diff 检查通过。提交信息 fix: explain model request failures without exposing secrets，提交后立即推送核对。
+- 下一阶段提供显式本地原文提取，不静默伪装模型成功；AI 提取恢复仍需要用户在系统设置中更新有效 DeepSeek Key。故障排查使用 API troubleshooting 流程，没有创建或替换密钥。
