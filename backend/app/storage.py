@@ -1573,6 +1573,12 @@ class SQLiteStore:
         note: str = "",
         platform_proof: ApplicationPlatformProof | None = None,
     ) -> ApplicationRecord:
+        if (platform_proof is None or not platform_proof.confirmed_at
+                or platform_proof.platform != job.platform or not platform_proof.source_url.strip()
+                or not platform_proof.evidence.strip()
+                or platform_proof.status not in {"applied", "already_applied"}
+                or platform_proof.action not in {"clicked_apply", "already_confirmed"}):
+            raise ValueError("仅在平台确认招呼已发送或简历已投递后保存记录。")
         now = datetime.now(UTC)
         tracker = ApplicationTrackerAgent()
         record = tracker.create_record(
@@ -1586,6 +1592,16 @@ class SQLiteStore:
         if platform_proof is not None:
             record = record.model_copy(update={"platform_proof": platform_proof})
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT id FROM jobs WHERE id = ?", (job.id,)).fetchone():
+                raise KeyError(f"Job {job.id} not found")
+            existing = conn.execute("SELECT id FROM applications WHERE job_id = ? ORDER BY id LIMIT 1", (job.id,)).fetchone()
+            if existing:
+                conn.execute("UPDATE applications SET platform_proof_json = ? WHERE id = ?", (
+                    json.dumps(platform_proof.model_dump(mode="json"), ensure_ascii=False), existing["id"],
+                ))
+                conn.commit()
+                return self.get_application(existing["id"])
             cursor = conn.execute(
                 """
                 INSERT INTO applications (

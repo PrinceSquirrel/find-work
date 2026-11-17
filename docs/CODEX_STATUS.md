@@ -3360,3 +3360,11 @@ Updated: 2026-07-03 Asia/Shanghai
 - 删除岗位时保护所有已关联投递的岗位（旧记录缺证也不猜测其真实性），未关联岗位连同生成材料/引用和检索索引一并删除；删除投递只删除所选本地记录、事件和索引，保留岗位。事务错误会回滚。
 - 全量后端 131、前端 64 项及 lint/build、diff 检查通过；初测修正测试夹具方法名和 FTS 文本 ID 匹配后全量重跑通过。
 - 本阶段提交信息 feat: add transactional bulk record deletion，提交后立即推送核对。后续将修复“打开聊天框即算成功”的入库误判，再接前端；未删除用户真实数据，三个既有未跟踪路径保持原样。
+
+### 真实记录确认阶段
+
+- 批量删除接口提交 5798c9f237565082e40c7c1f902ce9b7f7101e82 已推送，远端一致。
+- 五文件：browser_job_extractor_service.py、job_application_service.py、storage.py、test_api_flow.py、本文件。打开聊天框但没有已发送/已投递状态时返回未确认；仅 ready/预检不能创建投递。
+- 存储层要求平台、URL、证据、确认时间、成功状态与动作完整。对同一岗位重复确认沿用原记录，避免重复入库；新记录事务内检查岗位仍存在。
+- 测试直接执行生成的浏览器 JavaScript，覆盖空聊天框、招呼已发送、简历投递成功、验证拦截、无响应；覆盖不完整证明、重复确认。自动测试使用模拟页面，不操作用户平台。
+- 全量后端 143、前端 64 项及 lint/build、diff 检查通过。提交信息 fix: persist only confirmed platform contact records；前端批选与删除按钮仍待完成。

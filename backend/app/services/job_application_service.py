@@ -742,7 +742,7 @@ class JobApplicationService:
     def apply_to_platform(self, job_id: int, note: str = "") -> ApplicationRecord:
         job = self.store.get_job(job_id)
         platform_result = BrowserJobExtractorService().apply_to_job(job.platform, job.url)
-        if not platform_result.get("confirmed"):
+        if platform_result.get("confirmed") is not True or platform_result.get("status") not in {"applied", "already_applied"}:
             evidence = str(platform_result.get("evidence") or platform_result.get("status") or "platform not confirmed")
             raise PlatformApplicationNotConfirmedError(evidence)
         confirmation_note = self._platform_application_note(note, platform_result)

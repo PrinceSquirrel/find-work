@@ -2,13 +2,15 @@ import base64
 import inspect
 import json
 import sqlite3
+import subprocess
+from datetime import UTC, datetime
 from io import BytesIO
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.schemas import ExtractedJobCandidate, PlatformJobExtraction, PlatformSession, PlatformSessionsResponse
+from app.schemas import ApplicationPlatformProof, ExtractedJobCandidate, PlatformJobExtraction, PlatformSession, PlatformSessionsResponse
 from app.services import browser_job_extractor_service
 from app.services import job_application_service
 from app.services import platform_session_service
@@ -64,7 +66,10 @@ def _create_demo_application(client: TestClient) -> int:
 
     jobs_response = client.get("/api/jobs")
     job_id = jobs_response.json()[0]["id"]
-    record = client.app.state.service.create_application(job_id, note="测试夹具：平台已确认投递")
+    job = client.app.state.service.store.get_job(job_id)
+    record = client.app.state.service.store.create_application(job, note="测试夹具：平台已确认投递", platform_proof=ApplicationPlatformProof(
+        platform=job.platform, source_url=job.url, status="applied", action="clicked_apply", evidence="测试：招呼已发送", confirmed_at=datetime.now(UTC),
+    ))
     return record.id
 
 
@@ -377,6 +382,52 @@ def test_platform_apply_creates_application_only_after_platform_confirmation(tmp
     assert len(applications) == 1
     assert applications[0]["id"] == payload["id"]
     assert applications[0]["platform_proof"] == payload["platform_proof"]
+    repeated = client.post(f"/api/jobs/{job['id']}/platform-apply", json={"note": "重复确认"})
+    assert repeated.json()["id"] == payload["id"]
+    assert len(client.get("/api/applications").json()) == 1
+
+
+@pytest.mark.parametrize("status", ["ready", "chat_opened_unconfirmed", "clicked_unconfirmed"])
+def test_preview_or_open_chat_cannot_be_saved_even_with_a_truthy_flag(tmp_path, monkeypatch, status):
+    class FakeBrowser:
+        def apply_to_job(self, platform, url):
+            return {"confirmed": True, "status": status, "action": "clicked_apply", "evidence": "只打开窗口", "source_url": url}
+    monkeypatch.setattr(job_application_service, "BrowserJobExtractorService", FakeBrowser)
+    client = TestClient(create_app(db_path=tmp_path / "records.sqlite3"))
+    _, job_id = _create_evidence_job_context(client)
+    assert client.post(f"/api/jobs/{job_id}/platform-apply", json={}).status_code == 409
+    assert client.get("/api/applications").json() == []
+    with pytest.raises(ValueError, match="平台确认"):
+        client.app.state.service.create_application(job_id, "用户填写投递备注不等于发送成功")
+
+
+@pytest.mark.parametrize("after,chat,expected", [("聊天输入框", True, False), ("已发送", True, True), ("投递成功", False, True), ("安全验证", True, False), ("无变化", False, False)])
+def test_platform_click_script_requires_sent_or_submitted_state(after, chat, expected):
+    script = browser_job_extractor_service.BrowserJobExtractorService()._application_click_script("boss", "https://example.com/job")
+    harness = """
+const input = INPUT;
+let body = '岗位详情';
+globalThis.setTimeout = callback => { callback(); };
+globalThis.location = {href: 'https://example.com/job'};
+const button = {innerText:'立即沟通', disabled:false, className:'', offsetParent:{}, getAttribute:()=>null, scrollIntoView:()=>{}, click:()=>{body=input.after;}};
+globalThis.document = {body: {}, querySelectorAll:()=>[button], querySelector:()=>input.chat?{}:null};
+Object.defineProperty(document.body, 'innerText', {get:()=>body});
+""".replace("INPUT", json.dumps({"after": after, "chat": chat}, ensure_ascii=False))
+    result = subprocess.run(["node", "--input-type=module", "-e", harness + "console.log(JSON.stringify(await " + script + "));"], capture_output=True, text=True, encoding="utf-8", check=True)
+    assert json.loads(result.stdout)["confirmed"] is expected
+
+
+@pytest.mark.parametrize("missing", ["confirmed_at", "source_url", "evidence", "action"])
+def test_storage_does_not_save_incomplete_platform_proof(tmp_path, missing):
+    client = TestClient(create_app(db_path=tmp_path / "proof.sqlite3"))
+    _, job_id = _create_evidence_job_context(client)
+    store = client.app.state.service.store
+    job = store.get_job(job_id)
+    values = {"platform": job.platform, "source_url": job.url, "evidence": "已发送", "status": "applied", "action": "clicked_apply", "confirmed_at": datetime.now(UTC)}
+    values[missing] = None if missing == "confirmed_at" else ""
+    with pytest.raises(ValueError, match="平台确认"):
+        store.create_application(job, platform_proof=ApplicationPlatformProof(**values))
+    assert store.list_applications() == []
 
 
 def test_platform_apply_does_not_create_application_without_platform_confirmation(tmp_path, monkeypatch):

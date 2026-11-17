@@ -1051,7 +1051,7 @@ class BrowserJobExtractorService:
     }}
     const chatInput = document.querySelector("textarea,[contenteditable='true'],.chat-input,[class*='chat-input'],[class*='message-input']");
     if (chatInput) {{
-      return respond(true, "applied", "clicked_apply", `clicked platform button and opened chat/apply panel: ${{label}}`);
+      return respond(false, "chat_opened_unconfirmed", "clicked_apply", `已打开聊天窗口，但尚未确认招呼已发送或简历已投递：${{label}}`);
     }}
     return respond(false, "clicked_unconfirmed", "clicked_apply", `clicked "${{label}}", but platform did not show applied/contacted state`);
   }}
