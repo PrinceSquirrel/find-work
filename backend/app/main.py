@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.application_tracker import InvalidStatusTransition
@@ -555,6 +555,18 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     @app.get("/api/applications")
     def list_applications():
         return app.state.service.list_applications()
+
+    @app.get("/api/applications/page")
+    def query_applications(
+        position: str = Query(default="", max_length=200),
+        keyword: str = Query(default="", max_length=200),
+        location: str = Query(default="", max_length=200),
+        page: int = Query(default=1, ge=1, le=1000000),
+        page_size: int = Query(default=25, ge=25, le=100),
+    ):
+        if page_size not in {25, 50, 100}:
+            raise HTTPException(status_code=422, detail="每页条数只支持 25、50、100")
+        return app.state.service.store.query_applications(position=position, keyword=keyword, location=location, page=page, page_size=page_size)
 
     @app.get("/api/analytics/applications")
     def application_analytics():

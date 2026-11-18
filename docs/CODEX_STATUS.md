@@ -3449,3 +3449,11 @@ Updated: 2026-07-03 Asia/Shanghai
 - 平台标签不代表已登录、配置 Key 不代表有效；不自动测模型、不自动生成／投递。外部模型失败仍可显式选择现有本地提取，未取消人工确认。
 - 浏览器应看到下一步提示且三页原结构不变；剩余：完成单元／布局／恢复回归，再实现 R02。
 - 验证：后端 155、前端 79 全部通过，lint/build 通过；六页三尺寸布局回归通过，上传恢复 9 类检查通过（合成资料、拦截写请求，没有真实模型／平台调用）。提交 feat: guide the next safe job-search step。
+
+### R02a：投递筛选分页接口（complete）
+
+- R01 提交 bac3ae6af092247d288b597b2796474c8b22a198 已推送且远端一致。
+- 五文件：storage.py、main.py、test_application_pagination.py、APPLICATION_TRACKING_PLAN.md、本文件。增加 /api/applications/page，保留旧数组接口和全量统计；过滤先于分页，稳定排序、绑定参数、字面通配符和事务一致读取。
+- 新记录带岗位地点／JD 快照；旧记录以迁移时关联来源标记，未知地点不猜，重启不覆盖。未改创建投递的证明门槛和删除保护；本阶段前端仍显示预览。
+- 新测试覆盖 137 条合成记录三档分页、组合筛选、大小写／空格／特殊字符、空／越界、校验、末页删除、新旧快照与证明。验证后提交 feat: add snapshot-backed application query pagination。
+- 初测发现 URL 参数的 Literal[int] 不接收字符串及测试 JobMatch 必填字段缺失；已改为整数校验加允许值检查并修正合成数据。相关 14 项、后端全量 169 项、前端 79 项、lint/build、diff 检查全部通过；没有残留失败。

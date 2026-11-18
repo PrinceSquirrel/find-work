@@ -1,6 +1,6 @@
 # 松鼠世界 · 投递跟踪实施计划
 
-更新日期：2026-09-08。当前阶段：桌面一屏页面完成，新增筛选和分页的数据联动待实现。
+更新日期：2026-11-18。用户已批准 A 包 R02，按后端查询／前端接线／浏览器回归分阶段实施。以下预览说明保留为历史边界，当前进度见文末及 CODEX_STATUS.md。
 
 ## 已交付页面与边界
 
@@ -71,3 +71,10 @@
 在项目根目录运行 `.\scripts\start-project.ps1 -SkipInstall`，打开 `http://127.0.0.1:5173/`，点击“投递跟踪”。本轮没有引入新依赖。
 
 验证命令：根目录 `.\.venv\Scripts\python.exe -m pytest`；在 `frontend` 目录执行 `npm test -- --run`、`npm run lint`、`npm run build`。控件的渲染与边界测试位于 `frontend/src/ApplicationTrackingControls.test.tsx`。
+
+## R02 当前实施记录
+
+- 新增兼容接口 `GET /api/applications/page`：position／keyword／location／page／page_size；旧数组接口不变。返回 items／total／page／page_size／pages，统计口径固定 all_applications。
+- 筛选为 AND，英文忽略大小写，百分号／下划线为普通字符。先过滤再计数分页，同一事务读行／事件，排序 applied_at、id 倒序。越界回最后有效页，空结果 pages=0；只允许 25／50／100。
+- 新投递保存地点／JD 快照；旧记录仅迁移时回填存在的关联岗位，明确标“历史关联岗位（迁移时）”，不是原投递时间的证明；无来源不猜地址。后续不覆盖快照。当前只有岗位 city 字段来源，不凭公司名推断详细地址。
+- 页面仍待下一阶段接入。统计保持全部记录；选择／删除按当前页可见 ID 执行，换条件和页码清空选择。

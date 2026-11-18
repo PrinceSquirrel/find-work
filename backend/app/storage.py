@@ -297,6 +297,7 @@ class SQLiteStore:
             self._ensure_tailored_resume_columns(conn)
             self._ensure_job_detail_columns(conn)
             self._ensure_application_proof_columns(conn)
+            self._ensure_application_snapshot_columns(conn)
             self._ensure_model_secret_columns(conn)
 
     def _ensure_llm_usage_columns(self, conn: sqlite3.Connection) -> None:
@@ -333,6 +334,21 @@ class SQLiteStore:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(applications)").fetchall()}
         if "platform_proof_json" not in columns:
             conn.execute("ALTER TABLE applications ADD COLUMN platform_proof_json TEXT NOT NULL DEFAULT '{}'")
+
+    def _ensure_application_snapshot_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(applications)")}
+        for name in ("job_city_snapshot", "job_description_snapshot", "job_snapshot_origin"):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE applications ADD COLUMN {name} TEXT")
+        # Legacy values are a migration-time association, not evidence of the original application time.
+        conn.execute("""
+            UPDATE applications SET
+                job_city_snapshot = COALESCE((SELECT city FROM jobs WHERE jobs.id = applications.job_id), ''),
+                job_description_snapshot = COALESCE((SELECT description FROM jobs WHERE jobs.id = applications.job_id), ''),
+                job_snapshot_origin = 'legacy_job'
+            WHERE job_snapshot_origin IS NULL
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS applications_page_order ON applications(applied_at DESC, id DESC)")
 
     def _ensure_model_secret_columns(self, conn: sqlite3.Connection) -> None:
         for table in ("model_config", "model_profiles", "agent_model_routes"):
@@ -1606,9 +1622,10 @@ class SQLiteStore:
                 """
                 INSERT INTO applications (
                     job_id, company, title, platform, applied_at, current_status,
-                    read_at, replied_at, progress_stage, latest_note, platform_proof_json
+                    read_at, replied_at, progress_stage, latest_note, platform_proof_json,
+                    job_city_snapshot, job_description_snapshot, job_snapshot_origin
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.job_id,
@@ -1622,6 +1639,9 @@ class SQLiteStore:
                     record.progress_stage,
                     record.latest_note,
                     json.dumps(record.platform_proof.model_dump(mode="json"), ensure_ascii=False),
+                    job.city,
+                    job.description,
+                    "at_application",
                 ),
             )
             application_id = cursor.lastrowid
@@ -1644,6 +1664,9 @@ class SQLiteStore:
             ).fetchall()
         if row is None:
             raise KeyError(f"Application {application_id} not found")
+        return self._application_from_rows(row, event_rows)
+
+    def _application_from_rows(self, row: sqlite3.Row, event_rows: list[sqlite3.Row]) -> ApplicationRecord:
         events = [
             ApplicationEvent(
                 id=event["id"],
@@ -1755,6 +1778,51 @@ class SQLiteStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT id FROM applications ORDER BY applied_at DESC").fetchall()
         return [self.get_application(row["id"]) for row in rows]
+
+    def query_applications(self, *, position: str = "", keyword: str = "", location: str = "", page: int = 1, page_size: int = 25) -> dict[str, Any]:
+        if page < 1 or page_size not in {25, 50, 100}:
+            raise ValueError("Invalid application pagination")
+        clauses: list[str] = []
+        parameters: list[str] = []
+        for value, fields in (
+            (position, ["a.title"]),
+            (keyword, ["a.company", "a.title", "a.job_description_snapshot", "a.latest_note"]),
+            (location, ["a.job_city_snapshot"]),
+        ):
+            value = value.strip().lower()
+            if len(value) > 200:
+                raise ValueError("Application filter is too long")
+            if value:
+                literal = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                clauses.append("(" + " OR ".join(f"LOWER(COALESCE({field}, '')) LIKE ? ESCAPE '\\'" for field in fields) + ")")
+                parameters.extend([f"%{literal}%"] * len(fields))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._connect() as conn:
+            # Count, bounded rows and events share one read snapshot, including concurrent deletion.
+            conn.execute("BEGIN")
+            total = conn.execute("SELECT COUNT(*) FROM applications a" + where, parameters).fetchone()[0]
+            pages = (total + page_size - 1) // page_size
+            page = min(page, max(pages, 1))
+            rows = conn.execute(
+                "SELECT a.* FROM applications a" + where + " ORDER BY a.applied_at DESC, a.id DESC LIMIT ? OFFSET ?",
+                [*parameters, page_size, (page - 1) * page_size],
+            ).fetchall()
+            events: dict[int, list[sqlite3.Row]] = {}
+            if rows:
+                marks = ",".join("?" for _ in rows)
+                for event in conn.execute(f"SELECT * FROM application_events WHERE application_id IN ({marks}) ORDER BY id", [row["id"] for row in rows]):
+                    events.setdefault(event["application_id"], []).append(event)
+            items = []
+            for row in rows:
+                city = (row["job_city_snapshot"] or "").strip()
+                if city in {"未知城市", "未知", "未提供", "未展示"}:
+                    city = ""
+                items.append({
+                    **self._application_from_rows(row, events.get(row["id"], [])).model_dump(mode="json"),
+                    "location": city,
+                    "location_source": ("投递时岗位快照" if row["job_snapshot_origin"] == "at_application" else "历史关联岗位（迁移时）") if city else "未提供",
+                })
+        return {"items": items, "total": total, "page": page, "page_size": page_size, "pages": pages, "statistics_scope": "all_applications"}
 
     def save_llm_usage(self, entry: LLMUsageEntry) -> LLMUsageEntry:
         with self._connect() as conn:
