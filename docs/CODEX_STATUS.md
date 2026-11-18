@@ -3475,3 +3475,11 @@ Updated: 2026-07-03 Asia/Shanghai
 - 后端全量 169、前端 85、lint/build、脚本语法与 diff 检查通过；全站六页三尺寸布局回归通过。只出现模拟 503 和既有依赖警告，无未解决测试失败。
 - 只读确认正常后端空闲且进程属于本项目后，备份 output/before-application-query-32229746-5777-4dfb-a91b-d26ab600742c.sqlite3 并重启本项目后端；保留前端，新分页接口已在 8000 生效，未修改密钥和未删除真实记录。备份及 PID 不提交。
 - 提交 feat: connect live application filters and safe page actions。剩余清理已替代的预览组件、对齐 README／计划并最终全量复核；真人试用／30% 省时指标未执行，不冒充验收结果。
+
+### A 包收尾（complete）
+
+- R02c 提交 c410ed765e679844ac644b6c43691a63a2956325 已推送且远端一致。
+- 五文件：ApplicationTrackingControls.tsx、对应测试、README.md、APPLICATION_TRACKING_PLAN.md、本文件。移除不再引用的旧预览控件，将四条预览测试更新为真实控件／变更期间禁用保护；保留并扩展有效测试覆盖，没有删既有功能。
+- 使用方式：启动项目后刷新资料页查看能力／下一步；投递跟踪填条件并筛选、选条数／翻页，地点和来源可见，长列表内部滚动。需要重跑破坏性回归时仅使用 8767 身份校验临时服务，README 已写出命令。
+- 剩余：最终全量、布局和上传恢复复核及审批记录状态对齐；无未获批功能扩展。
+- 收尾验证：后端全量 169、前端 85、lint/build 全部通过；再次通过上传恢复九类和六页三尺寸布局。仅移除未引用预览代码；保留八条控件测试，更新为真实范围和变更禁用。diff 末尾空行已修正。提交 refactor: retire tracking previews after live query rollout；余下仅同步研究审批状态和交付记录。

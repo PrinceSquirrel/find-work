@@ -22,7 +22,7 @@
 - **资料工作台**：统一展示资料上传、在线预览、OCR 识别和 WPS 在线编辑入口；DOCX/PDF/TXT/MD/PNG/JPG/JPEG 已接入资料检查和事实确认，其他格式处理服务按 `docs/MATERIAL_WORKSPACE_PLAN.md` 分阶段接入。
 - **岗位雷达**：岗位搜索、筛选和详情核验。
 - **生成中心**：单个入口生成证据材料，在同一结果区切换简历/招呼语、编辑、审核、定稿和导出；支持历史版本与刷新恢复。实施记录见 [生成中心精简计划](docs/STUDIO_SIMPLIFICATION_PLAN.md)。
-- **投递跟踪**：森林主题进度概览、左侧结果表与右侧转化/时段统计；筛选栏和分页栏固定在结果区域，长记录在内部滚动。岗位/关键词/地址筛选和每页 25/50/100 条入口目前仍为前端预览，数据联动见 [投递跟踪实施计划](docs/APPLICATION_TRACKING_PLAN.md)。
+- **投递跟踪**：森林主题进度概览、左侧结果表与右侧转化/时段统计；岗位／关键词／来源地点组合筛选和 25／50／100 条服务端分页已接通。换条件或换页清空勾选，批量删除只处理当前页选中记录；漏斗／转化／时段仍明确统计全部投递。接口与边界见 [投递跟踪实施计划](docs/APPLICATION_TRACKING_PLAN.md)。
 - **系统设置**：模型、API、CDP 和系统能力检查。
 
 桌面端导航固定显示在左侧，主内容区会为导航预留空间；移动端自动切换为底部导航。首页包含产品说明、功能搜索和四个快捷入口。
@@ -32,6 +32,12 @@
 桌面布局回归（先启动项目）：运行 `npx --yes --package @playwright/cli playwright-cli -s=workspace-check open http://127.0.0.1:5173/`，再运行 `npx --yes --package @playwright/cli playwright-cli -s=workspace-check run-code --filename scripts/check-workspace-viewport.js`。检查首页搜索与功能跳转、侧栏工具归属、导航和主要卡片悬停高亮、六页品牌主题及 Logo 加载；在 1600×900、1280×720 下保护两页原布局、验证其余四页无整页溢出及模块重叠，并验证 390×844 的六页底部导航与宽度。脚本只读取页面，不发起模型调用或真实投递。
 
 资料工作台当前接受 WPS 文字/表格/演示、PDF、常见图片、ZIP/7Z/7P、HTML、Python、Markdown、TXT、MP3、MP4 和 MKV 的前端选择。在线预览、图片/PDF OCR 与 WPS 编辑入口目前明确标记为“下一阶段接入”，不会伪装成已可用的后端能力；详细边界、安全要求和验收顺序见 [资料工作台实施计划](docs/MATERIAL_WORKSPACE_PLAN.md)。
+
+格式能力地图区分七种已接入格式和未来格式：DOCX／文字 PDF／TXT／MD 可上传检查；PNG／JPG／JPEG 可保存但需手工补字，扫描 PDF 同理。其他规划格式虽可选择查看分类，但不会上传。资料、岗位搜索和生成入口内提供“下一步”提示，复用现有资料检查／模型设置，不自动测试模型或执行投递。仅检测到平台标签页不代表已登录，配置 Key 也不代表连接有效。
+
+投递分页接口为 `GET /api/applications/page?position=Python&keyword=SQL&location=上海&page=1&page_size=25`，返回 `items/total/page/page_size/pages/statistics_scope`；旧 `GET /api/applications` 数组接口保持兼容。新投递保存岗位地点／JD 快照；旧记录仅在有来源时迁移关联岗位，页面标注“历史关联岗位（迁移时）”，无地点来源显示“未提供”。最新备注参与关键词匹配；已删除／变更的候选岗位不会使已存快照漂移。
+
+筛选分页独立浏览器回归：启动项目后，另开终端执行 `.\.venv\Scripts\python.exe scripts/serve_application_query_check.py`，确认 8767 端口的 `/__application_query_identity` 返回 `temporary-application-query-check`，再运行 `npx --yes --package @playwright/cli playwright-cli -s=workspace-check run-code --filename scripts/check-application-query.js`。测试所有请求均转至临时数据库，使用 137 条合成记录且只删除其当前末页 12 条，真实资料不受影响。重复执行前停止并重启该临时服务；不使用该测试修改你的正式记录。
 
 最终品牌文件位于 `outputs/squirrel-world-logo-20260903/`：`squirrel-world-logo-v2.svg` 是可继续编辑的分层矢量源文件，`squirrel-world-logo-v2.png` 和 `squirrel-world-logo-v2-512.png` 是透明背景 PNG 导出。
 
