@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import { ApplicationFilterPreview, ApplicationPaginationPreview } from "./ApplicationTrackingControls";
+import { ApplicationFiltersBar, ApplicationPagination, applyApplicationFilters, EMPTY_APPLICATION_FILTERS, useApplicationQuery } from "./ApplicationTrackingControls";
 import { WorkspaceNextStep, type NextStepAction } from "./WorkspaceNextStep";
 import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
 import { api, getTailorBlockedMessage } from "./lib/api";
@@ -384,6 +384,11 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [failedAgent, setFailedAgent] = useState<ReturnType<typeof buildAgentStatusRows>[number]["agentName"] | null>(null);
   const [busy, setBusy] = useState<BusyState>(initialBusy);
+  const [applicationRevision, setApplicationRevision] = useState(0);
+  const applicationQuery = useApplicationQuery(activeModule === "applications" && !busy.boot, applicationRevision);
+  const pageApplications = applicationQuery.data?.items ?? [];
+  const applicationControlsBusy = deletingRecords !== null || busy.boot || busy.syncApplications || busy.updateApplicationId !== null || busy.applyJobId !== null;
+  useEffect(() => { setSelectedApplicationIds([]); }, [applicationQuery.query, applicationQuery.data?.page, activeModule]);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [manualResumeText, setManualResumeText] = useState("");
   const [searchKeywords, setSearchKeywords] = useState("React 实习, Agent 实习");
@@ -707,6 +712,7 @@ function App() {
   }
 
   async function refreshOutcomeData() {
+    setApplicationRevision(value => value + 1);
     const [nextApplications, nextAnalytics, nextUsage, nextAgentEvents] = await Promise.all([
       api.listApplications(),
       api.getApplicationAnalytics(),
@@ -2502,7 +2508,7 @@ function App() {
         </div>
 
         <Panel title="求职进度漏斗" kicker="Application Journey" className="module-panel module-applications pipeline-panel">
-          <p className="tracking-pipeline-caption">每一份投递，都是一颗等待发芽的种子。<span>按当前状态分布</span></p>
+          <p className="tracking-pipeline-caption">每一份投递，都是一颗等待发芽的种子。<span>全部投递 · 按当前状态分布</span></p>
           {busy.boot ? (
             <LoadingRows count={7} />
           ) : applications.length ? (
@@ -3343,10 +3349,12 @@ function App() {
 
       <section className="analytics-layout">
         <Panel title="投递结果表" kicker="Applications" className="module-panel module-applications applications-panel">
-          <ApplicationFilterPreview />
-          <BulkRecordActions label="投递记录" available={applications.map(record => record.id)} selected={selectedApplicationIds} onChange={setSelectedApplicationIds}
-            onDelete={ids => handleBulkDelete("applications", ids)} busy={deletingRecords !== null || busy.boot || busy.syncApplications || busy.updateApplicationId !== null || busy.applyJobId !== null}
-            suggestion={{ label: "选择待核对记录", ids: applications.filter(record => !summarizePlatformConfirmation(record.platform_proof, record.latest_note).confirmed).map(record => record.id) }}
+          <ApplicationFiltersBar value={applicationQuery.draft} onChange={applicationQuery.setDraft} disabled={applicationControlsBusy}
+            onApply={() => { setSelectedApplicationIds([]); applicationQuery.setQuery(current => applyApplicationFilters(current, applicationQuery.draft)); }}
+            onReset={() => { setSelectedApplicationIds([]); applicationQuery.setDraft(EMPTY_APPLICATION_FILTERS); applicationQuery.setQuery(current => applyApplicationFilters(current, EMPTY_APPLICATION_FILTERS)); }} />
+          <BulkRecordActions label="投递记录" available={pageApplications.map(record => record.id)} selected={selectedApplicationIds} onChange={setSelectedApplicationIds}
+            onDelete={ids => handleBulkDelete("applications", ids)} busy={applicationControlsBusy || applicationQuery.loading}
+            suggestion={{ label: "选择待核对记录", ids: pageApplications.filter(record => !summarizePlatformConfirmation(record.platform_proof, record.latest_note).confirmed).map(record => record.id) }}
             message={deletionMessages.applications} />
           <div className="sync-console">
             <div>
@@ -3361,7 +3369,7 @@ function App() {
               {busy.syncApplications ? "同步中..." : "同步投递状态"}
             </button>
           </div>
-          <div className="application-results-scroll" role="region" aria-label="投递记录与同步建议" tabIndex={0}>
+          <div className="application-results-scroll" role="region" aria-label="投递记录与同步建议" aria-busy={applicationQuery.loading} tabIndex={0}>
           {syncMessage ? <p className="sync-message">{syncMessage}</p> : null}
           {syncDiagnostics.length ? (
             <div className="sync-diagnostics">
@@ -3415,9 +3423,11 @@ function App() {
               ))}
             </div>
           ) : null}
-          {busy.boot ? (
+          {busy.boot || applicationQuery.loading ? (
             <LoadingRows count={4} />
-          ) : applications.length ? (
+          ) : applicationQuery.error ? (
+            <p role="alert">查询未完成：{applicationQuery.error}。请点击下方“重试查询”；没有删除或更改任何记录。</p>
+          ) : pageApplications.length ? (
             <div className="data-table application-table">
               <div className="table-head">
                 <span>记录</span>
@@ -3425,7 +3435,7 @@ function App() {
                 <span>下一步</span>
                 <span>事件</span>
               </div>
-              {applications.map((application) => {
+              {pageApplications.map((application) => {
                 const nextStatuses = getAllowedNextStatuses(application.current_status);
                 const platformConfirmation = summarizePlatformConfirmation(
                   application.platform_proof,
@@ -3440,6 +3450,7 @@ function App() {
                         <b>{application.company}</b>
                       </div>
                       <p>{application.title} · {PLATFORM_LABELS[application.platform] ?? application.platform}</p>
+                      <small title={application.location_source}>地点：{application.location || "未提供"} · {application.location_source}</small>
                       <small>投递于 {formatDateTime(application.applied_at)}</small>
                     </div>
                     <div>
@@ -3520,10 +3531,13 @@ function App() {
               })}
             </div>
           ) : (
-            <EmptyState title="暂无投递结果" text="确认投递后会记录平台、职位、当前状态和状态事件。" />
+            <EmptyState title="暂无匹配记录" text="可重置筛选查看全部投递；尚无投递时，请先在原平台确认真实发送。缺少地点来源的旧记录不会被猜测地址。" />
           )}
           </div>
-          <ApplicationPaginationPreview count={applications.length} loading={busy.boot} />
+          <ApplicationPagination data={applicationQuery.data} pageSize={applicationQuery.query.page_size} loading={busy.boot || applicationQuery.loading} error={applicationQuery.error} disabled={applicationControlsBusy}
+            onPage={page => { setSelectedApplicationIds([]); applicationQuery.setQuery(current => ({ ...current, page })); }}
+            onPageSize={page_size => { setSelectedApplicationIds([]); applicationQuery.setQuery(current => ({ ...current, page: 1, page_size })); }}
+            onRetry={applicationQuery.retry} />
         </Panel>
 
         <Panel title="转化统计" kicker="Read / Reply / Progress" className="module-panel module-applications conversion-panel">
