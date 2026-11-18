@@ -2,6 +2,39 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ApplicationFilterPreview, ApplicationPaginationPreview } from "./ApplicationTrackingControls";
+import { ApplicationFiltersBar, ApplicationPagination, applyApplicationFilters, INITIAL_APPLICATION_QUERY } from "./ApplicationTrackingControls";
+import type { ApplicationPage } from "./lib/api";
+
+describe("live tracking controls", () => {
+  const empty = { items: [], total: 0, page: 1, page_size: 25, pages: 0, statistics_scope: "all_applications" } as ApplicationPage;
+  const noop = () => {};
+  const pagination = (data: ApplicationPage | null, loading = false, error = "") => renderToStaticMarkup(<ApplicationPagination data={data} pageSize={25} loading={loading} error={error} onPage={noop} onPageSize={noop} onRetry={noop} />);
+  it("applies trimmed AND filters and resets page while retaining size", () => {
+    expect(applyApplicationFilters({ ...INITIAL_APPLICATION_QUERY, page: 4, page_size: 50 }, { position: " Python ", keyword: "SQL", location: " 张江 " })).toEqual({ position: "Python", keyword: "SQL", location: "张江", page: 1, page_size: 50 });
+  });
+  it("has real labeled filter controls and states the statistics and selection scope", () => {
+    const html = renderToStaticMarkup(<ApplicationFiltersBar value={INITIAL_APPLICATION_QUERY} onChange={noop} onApply={noop} onReset={noop} />);
+    expect(html.match(/type="search"/g)).toHaveLength(3);
+    expect(html).not.toContain("disabled");
+    expect(html).toContain("统计仍为全部投递");
+    expect(html).toContain("清空勾选");
+    expect(html.match(/maxLength="200"/g)).toHaveLength(3);
+  });
+  it("renders genuine ranges and first/last page boundaries", () => {
+    const first = pagination({ ...empty, total: 137, pages: 6 });
+    expect(first).toContain("第 1–25 条");
+    expect(first).toContain("第 1 / 6 页");
+    expect(first.match(/<button[^>]*disabled=""/g)).toHaveLength(1);
+    expect(pagination({ ...empty, total: 137, pages: 6, page: 6 })).toContain("第 126–137 条");
+  });
+  it("distinguishes empty, loading and retryable failure without fake pages", () => {
+    expect(pagination(empty)).not.toContain("第 1 /");
+    expect(pagination(null, true)).toContain("正在读取记录");
+    const failed = pagination(null, false, "网络错误");
+    expect(failed).toContain("重试查询");
+    expect(failed).not.toContain("共 0 条");
+  });
+});
 
 describe("application tracking frontend preview", () => {
   it("renders three labeled, editable search fields and a disabled filter action", () => {

@@ -4,6 +4,25 @@ import { ApiError, api, getTailorBlockedMessage } from "./api";
 import type { ModelConfigUpdate } from "../types";
 
 describe("api client", () => {
+  test("application query encodes literal filters and passes cancellation without changing the old endpoint", async () => {
+    const body = { items: [], total: 0, page: 1, page_size: 50, pages: 0, statistics_scope: "all_applications" };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => body } as Response);
+    const controller = new AbortController();
+    expect(await api.getApplicationPage({ position: " python ", keyword: "100%_&+", location: "张江", page: 1, page_size: 50 }, controller.signal)).toEqual(body);
+    const url = new URL(String(fetchMock.mock.calls[0][0]), "http://localhost");
+    expect(url.pathname).toBe("/api/applications/page");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ page: "1", page_size: "50", position: "python", keyword: "100%_&+", location: "张江" });
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+    await api.listApplications();
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/applications");
+    fetchMock.mockRejectedValue(new DOMException("Aborted", "AbortError"));
+    await expect(api.getApplicationPage({ position: "", keyword: "", location: "", page: 1, page_size: 25 }, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  test("application query preserves an actionable failure instead of returning an empty success", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: false, status: 503, json: async () => ({ detail: "记录暂时无法读取" }) } as Response);
+    await expect(api.getApplicationPage({ position: "", keyword: "", location: "", page: 1, page_size: 25 })).rejects.toThrow("记录暂时无法读取");
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });

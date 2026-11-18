@@ -89,8 +89,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export type BulkDeleteResult = { deleted_ids: number[]; protected_ids: number[]; missing_ids: number[] };
+export type ApplicationFilters = { position: string; keyword: string; location: string };
+export type ApplicationQuery = ApplicationFilters & { page: number; page_size: 25 | 50 | 100 };
+export type ApplicationPage = {
+  items: (ApplicationRecord & { location: string; location_source: string })[];
+  total: number; page: number; page_size: 25 | 50 | 100; pages: number;
+  statistics_scope: "all_applications";
+};
 
 export const api = {
+  getApplicationPage(query: ApplicationQuery, signal?: AbortSignal): Promise<ApplicationPage> {
+    const params = new URLSearchParams({ page: String(query.page), page_size: String(query.page_size) });
+    for (const name of ["position", "keyword", "location"] as const) {
+      if (query[name].trim()) params.set(name, query[name].trim());
+    }
+    return request<ApplicationPage>(`/api/applications/page?${params}`, { signal });
+  },
   uploadResume(file: File): Promise<ResumeDraft> {
     const formData = new FormData();
     formData.append("file", file);

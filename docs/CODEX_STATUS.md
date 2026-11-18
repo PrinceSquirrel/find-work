@@ -3457,3 +3457,10 @@ Updated: 2026-07-03 Asia/Shanghai
 - 新记录带岗位地点／JD 快照；旧记录以迁移时关联来源标记，未知地点不猜，重启不覆盖。未改创建投递的证明门槛和删除保护；本阶段前端仍显示预览。
 - 新测试覆盖 137 条合成记录三档分页、组合筛选、大小写／空格／特殊字符、空／越界、校验、末页删除、新旧快照与证明。验证后提交 feat: add snapshot-backed application query pagination。
 - 初测发现 URL 参数的 Literal[int] 不接收字符串及测试 JobMatch 必填字段缺失；已改为整数校验加允许值检查并修正合成数据。相关 14 项、后端全量 169 项、前端 79 项、lint/build、diff 检查全部通过；没有残留失败。
+
+### R02b：有界查询客户端与控件（complete）
+
+- R02a 提交 3ea9c7a884a0cce6a835edc557bda75df5555fa8 已同步且远端一致。
+- 五文件：api.ts、api.test.ts、ApplicationTrackingControls.tsx、对应测试、本文件。新增类型化分页调用、字面参数编码和取消；新增真实筛选／页数／加载／空／错误重试控件及查询生命周期。
+- 旧预览暂保留兼容，下一小阶段 App 接线时移除。查询按完整条件标识结果，清理时取消并忽略旧响应；无旧记录闪回和失败伪装空结果。界面在本阶段仍是原预览，不宣称已经接通。
+- 验证：后端全量 169、前端全量 85 全部通过；lint/build 通过。新增 URL 编码／取消／失败冒泡及实际范围／空页／条件归一化测试。提交 feat: prepare cancellable application queries and live controls，接下来绑定 App 并完成真实临时数据库浏览器回归。
