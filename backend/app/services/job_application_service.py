@@ -388,9 +388,11 @@ class JobApplicationService:
         failures = [
             f"{extraction.platform}:{extraction.status}:{extraction.error or '未提取到岗位'}"
             for extraction in extractions
-            if extraction.status != "success"
+            if extraction.status not in {"success", "no_results"}
         ]
         jobs = [job for extraction in extractions for job in extraction.jobs]
+        if not jobs and extractions and all(extraction.status == "no_results" for extraction in extractions):
+            return []
         if failures or not jobs:
             reason = "; ".join(failures) if failures else "没有从浏览器页面提取到岗位"
             raise ValueError(f"browser_cdp extraction failed: {reason}")

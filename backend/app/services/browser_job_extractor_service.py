@@ -247,6 +247,41 @@ class BrowserJobExtractorService:
     ) -> BrowserJobExtractResponse:
         if not self.cdp_url:
             return self.extract(platforms, limit)
+        cities = list(dict.fromkeys(part.strip().removesuffix("市") for part in re.split(r"[,，、;；\n]+", city) if part.strip())) or [""]
+        if len(cities) > 5:
+            raise ValueError("一次最多搜索 5 个城市，请分批搜索。")
+        if "boss" in platforms:
+            for requested in cities:
+                self._search_url("boss", "", requested)
+        if len(cities) > 1:
+            responses = []
+            for requested in cities:
+                response = self.search_and_extract(platforms, keywords, requested, max(1, (limit + len(cities) - 1) // len(cities)))
+                responses.append(response)
+                if any(part.status not in {"success", "no_results"} for part in response.extractions):
+                    break
+            merged = []
+            for platform in platforms:
+                parts = [part for response in responses for part in response.extractions if part.platform == platform]
+                jobs = []
+                seen = set()
+                for part in parts:
+                    for job in part.jobs:
+                        identity = job.url or (job.title, job.company, job.city)
+                        if identity not in seen:
+                            seen.add(identity)
+                            jobs.append(job)
+                failed = [part for part in parts if part.status not in {"success", "no_results"}]
+                result = (failed or parts)[0].model_copy(deep=True)
+                result.jobs = jobs[:limit]
+                result.diagnostics.extracted_job_count = len(result.jobs)
+                if not failed:
+                    result.status = "success" if jobs else "no_results"
+                    result.diagnostics.failure_reason = "" if jobs else "所选城市暂无匹配岗位"
+                    result.diagnostics.suggestion = "" if jobs else "请减少关键词或更换城市后重试。"
+                merged.append(result)
+            return BrowserJobExtractResponse(cdp_url=self.cdp_url, extractions=merged)
+        city = cities[0]
         try:
             tabs = self._load_tabs()
         except (OSError, TimeoutError, ValueError, json.JSONDecodeError):
@@ -434,12 +469,12 @@ class BrowserJobExtractorService:
             candidate_card_count=int(runtime_diagnostics.get("candidate_card_count", 0) or 0),
             extracted_job_count=len(jobs),
             text_quality_warnings=text_quality_warnings,
-            failure_reason="" if jobs else "没有从当前页面提取到岗位",
-            suggestion="" if jobs else "确认当前页面是岗位列表页、已登录且没有验证码或空结果提示。",
+            failure_reason="" if jobs else ("平台明确显示暂无匹配岗位" if runtime_diagnostics.get("page_state") == "empty_results" else "没有从当前页面提取到岗位"),
+            suggestion="" if jobs else ("请减少关键词或更换城市后重试。" if runtime_diagnostics.get("page_state") == "empty_results" else "确认当前页面是岗位列表页、已登录且没有验证码或空结果提示。"),
         )
         return PlatformJobExtraction(
             platform=platform,
-            status="success" if jobs else "empty",
+            status="success" if jobs else ("no_results" if runtime_diagnostics.get("page_state") == "empty_results" else "empty"),
             source_url=source_url,
             jobs=jobs,
             diagnostics=diagnostics,
@@ -920,7 +955,12 @@ class BrowserJobExtractorService:
         from urllib.parse import urlencode
 
         if platform == "boss":
-            city_code = BOSS_CITY_CODES.get(city.strip(), city.strip())
+            requested_city = city.strip().removesuffix("市")
+            if re.search(r"[,，、;；\n]", requested_city):
+                raise ValueError("平台搜索链接每次只能指定一个城市，请使用多城市搜索入口。")
+            city_code = BOSS_CITY_CODES.get(requested_city, requested_city)
+            if city_code and not re.fullmatch(r"\d{9}", city_code):
+                raise ValueError("BOSS 暂不支持此城市名称，请使用已支持城市或平台的 9 位城市代码。")
             query = urlencode({"query": keyword, "city": city_code})
             return f"https://www.zhipin.com/web/geek/jobs?{query}"
         if platform == "shixiseng":
@@ -1334,8 +1374,16 @@ class BrowserJobExtractorService:
   const seenSnapshotKeys = new Set();
   const matchedSelectorCounts = {{}};
   const countCandidateNodes = () => selectors.reduce((total, selector) => total + document.querySelectorAll(selector).length, 0);
+  const pageState = () => {{
+    const visible = (node) => Boolean(node?.getClientRects().length);
+    const body = text(document.body);
+    if (/请完成安全验证|拖动滑块|向右滑动|异常访问|请先登录|扫码登录/.test(body)) return "blocked";
+    const empty = [...document.querySelectorAll(".job-empty-wrapper,.job-empty-box,.job-recommend-result,[class*='empty']")].some(node => visible(node) && /没有找到相关职位|暂无相关职位|暂无匹配|未找到.*职位/.test(text(node)));
+    return empty ? "empty_results" : "";
+  }};
   const waitForCandidateCards = async () => {{
     for (let attempt = 0; attempt < 12; attempt += 1) {{
+      if (pageState()) return false;
       if (countCandidateNodes() > 0) return true;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }}
@@ -1441,6 +1489,8 @@ class BrowserJobExtractorService:
     collectCandidateCards();
   }};
   await waitForCandidateCards();
+  const state = pageState();
+  if (state) return {{ jobs: [], diagnostics: {{ page_state: state, matched_selector_counts: {{}}, candidate_card_count: 0 }} }};
   collectCandidateCards();
   await scrollForMoreCards();
   collectCandidateCards();

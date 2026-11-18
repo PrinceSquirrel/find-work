@@ -3493,3 +3493,12 @@ Updated: 2026-07-03 Asia/Shanghai
 - 隔离初测发现相对 basetemp 随 cwd 改变而失效，已在切换目录前解析为绝对路径；重测后端全量 170 passed（52.64 秒）、前端 85 passed、lint/build、脚本语法与 diff 检查通过，仅既有 reportlab 警告。共享只读方式计算正式数据库的测试前后 SHA256，结果一致；不会把被占用文件的空校验值当成功。
 - 最终提交 test: isolate default app initialization and close approved iteration，包含本阶段五文件；每个阶段提交已分别同步核对，最终提交后立即推送并在交付中回报编号。原有 output/、work-find.txt 和用户 Markdown 保留且不提交，临时服务结束，正式前后端保持运行。
 - 完成范围仅 A 包：R00 能力对齐、R01 安全下一步、R02 真实筛选分页；所有人工核验／真实平台证明和常驻导航不变。刷新 http://127.0.0.1:5173/ 可使用，启动命令仍为 .\scripts\start-project.ps1 -SkipInstall。
+
+## 2026-11-18：三处缺陷逐个修复（bug 1 complete）
+
+- 用户授权分析三张截图；按要求逐个修复逐个验证，不并行修改三处。开始时跟踪文件干净，原 output/、work-find.txt、用户 Markdown 保留。
+- 第一处通过只读 CDP 核实：实际 BOSS URL 的 city 是“上海，杭州”，页面明确无相关职位，候选 1 实为页脚“职位订阅”链接，不能虚构职位或归咎模型。
+- 五文件：browser_job_extractor_service.py、job_application_service.py、test_search_city_recovery.py、serve_workspace_bug_check.py、本文件。多城市拆分、去重并依次搜索（最多五城），每城使用有效代码；平台明确空结果返回 no_results，不拿页脚当候选，也不当异常；真正连接／验证／结构失败仍报错。
+- 新测试与临时浏览器脚本端点仅运行合成数据，不保存真实岗位／资料，不调用模型、不发送投递。第一处验证完成后再开始资料选择问题。
+- 第一处验证通过：新增 5 项、后端全量 175、前端 85、lint/build 和 diff 检查通过；隔离真实 DOM 验证空页脚不误提取、正常两卡可读、验证页停止。一次终端引号问题修正后重测通过，生成 JS 语法检查通过。
+- 用户当前已登录 BOSS 页低频只读复测：关键词 AI产品经理实习生、上海／杭州拆分后成功得到 2 条岗位；没有调用模型、保存岗位或发送消息。提交 fix: split city searches and handle explicit empty results；正常后端在三处全部完成后统一重载。
