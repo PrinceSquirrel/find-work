@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApplicationFilterPreview, ApplicationPaginationPreview } from "./ApplicationTrackingControls";
+import { WorkspaceNextStep, type NextStepAction } from "./WorkspaceNextStep";
 import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
 import { api, getTailorBlockedMessage } from "./lib/api";
 import { uploadEvidenceBatch } from "./lib/evidenceUpload";
@@ -351,6 +352,7 @@ function App() {
   const evidenceUploadLock = useRef(false);
   const evidenceExtractionLock = useRef(false);
   const workspaceRefreshVersion = useRef(0);
+  const [workspaceLoadFailed, setWorkspaceLoadFailed] = useState(false);
   const studioLock = useRef(false);
   const [studioTab, setStudioTab] = useState<"resume" | "greeting">("resume");
   const [materialHistory, setMaterialHistory] = useState<Record<number, TrustedTailorBundle[]>>({});
@@ -595,6 +597,7 @@ function App() {
       const activeRunId = lastRun?.id ?? (persistedRunIds.length ? Math.max(...persistedRunIds) : null);
       const visibleJobs = filterJobsForActiveSearchRun(nextJobs, activeRunId);
       setResume(nextResume);
+      setWorkspaceLoadFailed(false);
       setManualResumeText(nextResume?.raw_text ?? "");
       if (nextResume && !searchFieldsTouched) {
         const suggestedKeywords = getProfileStringArray(nextResume.profile, "suggested_keywords");
@@ -652,6 +655,7 @@ function App() {
       }
     } catch (nextError) {
       if (refreshVersion !== workspaceRefreshVersion.current) return;
+      setWorkspaceLoadFailed(true);
       setFailedAgent("ResumeParserAgent");
       setError(toErrorMessage(nextError));
     } finally {
@@ -1834,6 +1838,24 @@ function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function handleNextStep(action: NextStepAction | "settings") {
+    if (action === "retry") { void refreshWorkspace(); return; }
+    if (action === "materials") { evidenceDialog.current?.showModal(); return; }
+    activateWorkspaceModule(action === "connections" ? "jobs" : action);
+    if (action === "connections") void handleRefreshSessions();
+  }
+
+  const taskGuidance = <WorkspaceNextStep progress={{
+    loading: busy.boot, loadFailed: workspaceLoadFailed,
+    hasResume: Boolean(resume), resumeReadable: resumeReadingStatus.canGenerateMaterials,
+    sources: evidenceSources.length,
+    needsText: evidenceSources.filter(source => source.manual_text_required || !source.raw_text.trim()).length,
+    draftFacts: evidenceCards.filter(card => card.status === "draft").length,
+    confirmedFacts: confirmedEvidenceCards.length, hasJobs: jobs.length > 0,
+    tabsDetected: Object.entries(platforms).some(([, selected]) => selected) && Object.entries(platforms).filter(([, selected]) => selected).every(([platform]) => platformSessions.some(session => session.platform === platform && session.state === "tab_detected")),
+    hasMaterial: Boolean(trustedTailor), finalized: trustedTailor?.review.trusted_evidence_finalized === true,
+  }} onAction={handleNextStep} />;
+
   return (
     <div className="squirrel-app" data-active-module={activeModule}>
       <aside className="squirrel-sidebar" aria-label="主导航">
@@ -1997,6 +2019,7 @@ function App() {
               </div>
               <i>{evidenceFiles.length ? `${evidenceFiles.length} 个待处理` : "等待选择"}</i>
             </header>
+            {taskGuidance}
             <label className="material-drop-zone">
               <input
                 type="file"
@@ -2319,6 +2342,7 @@ function App() {
           </Panel>
 
           <Panel title="搜索任务" kicker="Search Run" className="module-panel module-jobs search-panel">
+            {taskGuidance}
             <form className="search-form" onSubmit={handleSearch}>
               <label>
                 <span>关键词</span>
@@ -2835,6 +2859,7 @@ function App() {
         </dialog>
       <section className="evidence-lab" aria-label="可信经历资料库">
         <Panel title="按 JD 可信生成" kicker="Grounded Tailor" className="module-panel module-studio evidence-tailor-panel">
+          {taskGuidance}
           <div className="trusted-job-banner">
             <span>当前岗位</span>
             <b>{selectedJob ? `${selectedJob.company} · ${selectedJob.title}` : "尚未选择岗位"}</b>
