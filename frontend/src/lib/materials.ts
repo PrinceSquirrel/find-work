@@ -1,3 +1,5 @@
+import { EVIDENCE_PARSE_EXTENSIONS } from "./evidenceUpload";
+
 export type MaterialFormatGroup = {
   id: string;
   label: string;
@@ -41,7 +43,7 @@ export const MATERIAL_FORMAT_GROUPS: MaterialFormatGroup[] = [
     id: "document-visual",
     label: "PDF 与图片",
     icon: "图",
-    description: "支持预览，后续接入 OCR",
+    description: "PDF 可提取文字；PNG/JPG 可保存，扫描件需手工补字，预览与 OCR 待接入",
     extensions: ["pdf", "png", "jpg", "jpeg", "webp", "bmp", "gif"],
   },
   {
@@ -65,7 +67,7 @@ export const MATERIAL_WORKBENCH_TOOLS: MaterialWorkbenchTool[] = [
     id: "upload",
     eyebrow: "01 / COLLECT",
     title: "资料上传",
-    description: "统一接收 WPS、图片、压缩包、源码、音频和视频资料。",
+    description: "已接入 DOCX、PDF、TXT、MD、PNG、JPG、JPEG；其他格式暂不上传。",
     icon: "↑",
     status: "frontend-ready",
   },
@@ -73,7 +75,7 @@ export const MATERIAL_WORKBENCH_TOOLS: MaterialWorkbenchTool[] = [
     id: "preview",
     eyebrow: "02 / PREVIEW",
     title: "在线预览",
-    description: "在工作台中预览文档、图片、PDF、代码和媒体内容。",
+    description: "规划能力，暂未接入。当前可在资料检查中查看提取正文。",
     icon: "◉",
     status: "planned",
   },
@@ -81,7 +83,7 @@ export const MATERIAL_WORKBENCH_TOOLS: MaterialWorkbenchTool[] = [
     id: "ocr",
     eyebrow: "03 / RECOGNIZE",
     title: "OCR 识别",
-    description: "把图片或扫描 PDF 转成可搜索、可校对的文本。",
+    description: "规划能力，暂未自动识别。图片或扫描 PDF 请先手工补全正文。",
     icon: "文",
     status: "planned",
   },
@@ -89,7 +91,7 @@ export const MATERIAL_WORKBENCH_TOOLS: MaterialWorkbenchTool[] = [
     id: "wps",
     eyebrow: "04 / EDIT",
     title: "WPS 在线编辑",
-    description: "调用 WPS 打开常见办公格式，并回写编辑后的版本。",
+    description: "规划能力，暂未接入网页编辑或版本回写，不会发送文件给 WPS。",
     icon: "✎",
     status: "planned",
   },
@@ -103,6 +105,14 @@ export const MATERIAL_UPLOAD_ACCEPT = MATERIAL_FORMAT_GROUPS
 export function getMaterialFormatGroup(filename: string): MaterialFormatGroup | null {
   const extension = filename.split(".").pop()?.toLocaleLowerCase("zh-CN") ?? "";
   return MATERIAL_FORMAT_GROUPS.find((group) => group.extensions.includes(extension)) ?? null;
+}
+
+export function getMaterialCapability(filename: string): string {
+  const extension = filename.split(".").pop()?.toLowerCase() ?? "";
+  if (!EVIDENCE_PARSE_EXTENSIONS.has(extension)) return "规划格式 · 暂不上传";
+  if (["png", "jpg", "jpeg"].includes(extension)) return "可保存 · 需手工补字";
+  if (extension === "pdf") return "可上传 · 扫描件需补字";
+  return "可上传检查";
 }
 
 export function formatMaterialSize(bytes: number): string {

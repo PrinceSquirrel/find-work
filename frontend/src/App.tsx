@@ -35,6 +35,7 @@ import type { SystemHealthOperationFeedback } from "./lib/dashboard";
 import {
   formatMaterialSize,
   getMaterialFormatGroup,
+  getMaterialCapability,
   MATERIAL_FORMAT_GROUPS,
   MATERIAL_UPLOAD_ACCEPT,
   MATERIAL_WORKBENCH_TOOLS,
@@ -1982,7 +1983,7 @@ function App() {
                 <h2>{tool.title}</h2>
                 <p>{tool.description}</p>
               </div>
-              <small>{tool.status === "frontend-ready" ? "前端入口已完成" : "下一阶段接入"}</small>
+              <small>{tool.status === "frontend-ready" ? "已接入资料检查 · 7 种格式" : "下一阶段接入"}</small>
             </article>
           ))}
         </div>
@@ -2008,7 +2009,7 @@ function App() {
               />
               <span className="material-drop-icon" aria-hidden="true">＋</span>
               <strong>选择文件或拖放到这里</strong>
-              <small>WPS 文档、图片、PDF、ZIP / 7Z / 7P、HTML、Python、音频与视频均已列入前端接入范围。</small>
+              <small>可上传 DOCX、PDF、TXT、MD、PNG/JPG/JPEG。其余规划格式可选择查看分类，但不会上传；图片和扫描件需补全正文。</small>
             </label>
 
             {evidenceFiles.length ? (
@@ -2019,7 +2020,7 @@ function App() {
                     <div key={`${file.name}-${file.lastModified}`}>
                       <span>{group?.icon ?? "?"}</span>
                       <p><b>{file.name}</b><small>{group?.label ?? "待识别格式"} · {formatMaterialSize(file.size)}</small></p>
-                      <i>待接入</i>
+                      <i>{getMaterialCapability(file.name)}</i>
                     </div>
                   );
                 })}
@@ -2072,16 +2073,16 @@ function App() {
           <header>
             <div>
               <span>FORMAT MAP</span>
-              <h2 id="material-format-title">支持格式地图</h2>
+              <h2 id="material-format-title">格式能力地图</h2>
             </div>
-            <small>共 {MATERIAL_FORMAT_GROUPS.reduce((total, group) => total + group.extensions.length, 0)} 个扩展名入口</small>
+            <small>7 种已接入 · 共 {MATERIAL_FORMAT_GROUPS.reduce((total, group) => total + group.extensions.length, 0)} 种可用／规划格式</small>
           </header>
           <div className="material-format-grid">
             {MATERIAL_FORMAT_GROUPS.map((group) => (
               <article key={group.id}>
                 <span className="material-format-icon" aria-hidden="true">{group.icon}</span>
                 <div><b>{group.label}</b><small>{group.description}</small></div>
-                <p>{group.extensions.map((extension) => <i key={extension}>.{extension}</i>)}</p>
+                <p>{group.extensions.map((extension) => <i key={extension} title={getMaterialCapability(`file.${extension}`)} aria-label={`.${extension}：${getMaterialCapability(`file.${extension}`)}`}>.{extension}</i>)}</p>
               </article>
             ))}
           </div>
