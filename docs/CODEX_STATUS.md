@@ -3422,3 +3422,14 @@ Updated: 2026-07-03 Asia/Shanghai
 - 用用户本地已保存的 source #5 验证 mode=local：1358 字符正文保留，生成 12 张卡片，全部 draft、原文引用可定位、标记未调用模型；没有向外部模型发送该文件，没有自动确认事实。
 - 用户可刷新资料工作台，打开“查看资料与确认事实”核对这 12 张卡片。恢复 AI 提取需在系统设置更新有效的 DeepSeek Key，必要时检查独立的“简历/招呼语生成”配置。
 - 提交信息 fix: recover uploaded materials without model credentials；按要求提交后立即推送核对。原有用户文件及 output/ 均不提交，未改动密钥、.env 或服务商账户。
+
+## 2026-11-18：产品调研与迭代审批（研究整理，功能待审批）
+
+- 本阶段只做产品研究与方案，不改产品代码、布局、配置、密钥或真实数据，不调用模型／招聘平台，不自动实施旧计划。
+- 已核对当前六模块和真实能力，对比 BossHunter、OpenJob、AIHawk、Simplify、Teal、Huntr、Reactive Resume 七个代表产品；区分官方能力宣称、公开用户自述、当前源码证据和研究者推断。
+- 反馈表含 12 个来源页面、14 位不同作者的单元（5 GitHub Issue、9 Reddit 帖子／评论）；其中 1 位为项目成员。多标签统计只用于小样本主题整理，不外推用户比例／市场规模／效果。小红书无可核验评论，抖音仅搜索线索且正文不可读取，不计入评论样本。
+- 新增 docs/research/2026-11-18-job-agent-market-review.md、2026-11-18-feedback-sample.csv、2026-11-18-iteration-proposal.md，加本文件共四文件；采用价值／成本框架提出 A 包，5–8 人日估算含缓冲，所有建议均待审批，没有更改旧计划的授权状态。
+- 浏览器应保持原样；可直接打开研究 Markdown 和 CSV 查看对比、逐条反馈、候选范围与验收。启动仍使用 README 中已有 start-project.ps1 -SkipInstall。
+- 剩余：用户审批 A 包／单项／预算后，才对齐旧计划并按每阶段 3–5 文件实施；调研不能替代真实用户访谈和功能验收。
+- 本阶段验证：后端全量 155 passed（45.60 秒），前端全量 73 passed；类型静态检查、生产构建、diff 检查通过。研究表结构检查通过：14 个单元、14 位作者、12 个页面，主题计数 4／4／4／3／4／1 与报告一致，文内相对链接存在。仅有既有 reportlab 弃用警告。
+- 提交信息 docs: research job agent market and propose prioritized iterations；本节与三份研究文件同属一个文档逻辑提交，不包含 output/ 或原有用户文件；提交后立即推送当前分支并核对远端 HEAD，结果在本轮交付中回报。研究交付完成不代表功能实施或用户审批完成。
