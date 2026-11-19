@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApplicationFiltersBar, ApplicationPagination, applyApplicationFilters, EMPTY_APPLICATION_FILTERS, useApplicationQuery } from "./ApplicationTrackingControls";
 import { WorkspaceNextStep, type NextStepAction } from "./WorkspaceNextStep";
 import { EvidenceUploadForm } from "./EvidenceUploadForm";
+import { prepareStudioJob, StudioPreparation } from "./StudioPreparation";
 import { evidenceCardToDraft, evidenceConfirmation, evidenceDraftPayload, splitEvidenceDraftList, type EvidenceCardDraft } from "./lib/evidenceCards";
 import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
 import { api, getTailorBlockedMessage } from "./lib/api";
@@ -317,6 +318,7 @@ function App() {
   const [manualEvidenceDraft, setManualEvidenceDraft] = useState<EvidenceCardDraft>(emptyEvidenceCardDraft);
   const [evidenceRecommendations, setEvidenceRecommendations] = useState<EvidenceRecommendation[]>([]);
   const [selectedEvidenceCardIds, setSelectedEvidenceCardIds] = useState<number[]>([]);
+  const [manualEvidenceSelection, setManualEvidenceSelection] = useState(false);
   const evidenceDialog = useRef<HTMLDialogElement>(null);
   const evidenceUploadLock = useRef(false);
   const evidenceExtractionLock = useRef(false);
@@ -405,7 +407,20 @@ function App() {
   const trustedTailor = selectedJob ? trustedTailors[selectedJob.id] ?? null : null;
   activeStudioJobId.current = selectedJob?.id;
   useEffect(() => {
+    if (activeModule !== "studio" || !selectedJob || selectedJob.detail_status === "manual_filled" || getJobDetailQuality(selectedJob).isComplete) return;
+    const job = selectedJob;
+    let cancelled = false;
+    setBusy(current => ({ ...current, refreshDetailJobId: job.id }));
+    void prepareStudioJob(job, api.refreshJobDetail).then(updated => {
+      if (!cancelled) setJobs(current => current.map(item => item.id === updated.id ? updated : item));
+    }).catch(nextError => { if (!cancelled) setError(toErrorMessage(nextError)); }).finally(() => {
+      setBusy(current => current.refreshDetailJobId === job.id ? { ...current, refreshDetailJobId: null } : current);
+    });
+    return () => { cancelled = true; };
+  }, [activeModule, selectedJob?.id]);
+  useEffect(() => {
     setSelectedEvidenceCardIds([]);
+    setManualEvidenceSelection(false);
     setEvidenceRecommendations([]);
     setStudioTab("resume");
   }, [selectedJob?.id]);
@@ -1201,6 +1216,8 @@ function App() {
   }
 
   async function handleLaunchCdpBrowser() {
+    const selectedPlatforms = getSelectedPlatforms(platforms);
+    if (!selectedPlatforms.length) { setError("请先勾选需要启动的招聘平台。"); return; }
     setBusy((current) => ({ ...current, launchCdp: true }));
     setError(null);
     setCdpLaunchMessage(null);
@@ -1211,7 +1228,7 @@ function App() {
     });
     try {
       const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
-      const response = await fetch(`${apiBaseUrl}/api/browser/launch-cdp`, { method: "POST" });
+      const response = await fetch(`${apiBaseUrl}/api/browser/launch-cdp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platforms: selectedPlatforms }) });
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as { detail?: string };
         throw new Error(payload.detail || `启动浏览器失败 (${response.status})`);
@@ -1256,7 +1273,7 @@ function App() {
           .map((keyword) => keyword.trim())
           .filter(Boolean),
         city: searchCity.trim(),
-        limit: 10
+        limit: 50
       });
       setPlatformExtractions(response.extractions);
       if (response.extractions.some((extraction) => extraction.status === "success" && extraction.jobs.length > 0)) {
@@ -1660,14 +1677,12 @@ function App() {
     setBusy((current) => ({ ...current, trustedTailorJobId: selectedJob.id }));
     setError(null);
     try {
-      let cardIds = chooseConfirmedCards(evidenceCards, selectedEvidenceCardIds);
-      if (!cardIds.length) {
-        const recommendations = await api.getEvidenceRecommendations(selectedJob.id);
-        if (activeStudioJobId.current === selectedJob.id) setEvidenceRecommendations(recommendations);
-        cardIds = chooseConfirmedCards(evidenceCards, recommendations.filter(item => item.score >= 40).map(item => item.card.id));
-        if (!cardIds.length) throw new Error("未找到足够相关的经历，请在左侧手动选择已确认卡片。");
-      }
-      const bundle = await api.generateTrustedTailor(selectedJob.id, resume.id, cardIds);
+      const target = await prepareStudioJob(selectedJob, api.refreshJobDetail);
+      setJobs(current => current.map(item => item.id === target.id ? target : item));
+      if (activeStudioJobId.current !== target.id) return;
+      const cardIds = manualEvidenceSelection ? chooseConfirmedCards(evidenceCards, selectedEvidenceCardIds) : [];
+      if (manualEvidenceSelection && !cardIds.length) throw new Error("手动模式请至少选择一张经历，或切回智能体自动选择。");
+      const bundle = await api.generateTrustedTailor(target.id, resume.id, cardIds);
       setTrustedTailor(bundle);
       setMaterialHistory(current => ({ ...current, [bundle.job_id]: [bundle, ...(current[bundle.job_id] ?? [])] }));
       setTrustedClaimDrafts(current => ({ ...current, ...Object.fromEntries(bundle.claims.map((claim) => [claim.id, claim.text])) }));
@@ -2830,38 +2845,14 @@ function App() {
             </div>
           </div>
           <div className="evidence-actions">
-            <button className="primary" type="button" disabled={!selectedJob || !resume || !confirmedEvidenceCards.length || busy.trustedTailorJobId !== null} onClick={() => void handleGenerateTrustedTailor()}>
+            <button className="primary" type="button" disabled={!selectedJob || !resume || !confirmedEvidenceCards.length || busy.trustedTailorJobId !== null || busy.refreshDetailJobId !== null} onClick={() => void handleGenerateTrustedTailor()}>
               {busy.trustedTailorJobId !== null ? "推荐与生成中..." : "生成求职材料"}
             </button>
           </div>
 
-          <div className="recommendation-list">
-            <p>可手动勾选经历；不勾选时自动推荐相关的已确认事实。</p>
-            {!evidenceRecommendations.length ? confirmedEvidenceCards.map(card => (
-              <label className="recommendation-card" key={card.id}>
-                <input type="checkbox" checked={selectedEvidenceCardIds.includes(card.id)} onChange={() => toggleEvidenceCard(card.id)} />
-                <span>{card.title} · 已确认</span>
-              </label>
-            )) : null}
-            {evidenceRecommendations.length ? evidenceRecommendations.map((recommendation) => (
-              <label className={`recommendation-card ${selectedEvidenceCardIds.includes(recommendation.card.id) ? "is-selected" : ""}`} key={recommendation.card.id}>
-                <input
-                  type="checkbox"
-                  checked={selectedEvidenceCardIds.includes(recommendation.card.id)}
-                  onChange={() => toggleEvidenceCard(recommendation.card.id)}
-                />
-                <div>
-                  <b>{recommendation.card.title}</b>
-                  <span>{recommendation.hit_reasons.join(" · ")}</span>
-                  <small>相关度 {recommendation.score} / 100 · {recommendation.card.provenance_type === "document" ? "文件证据" : "用户自述"}</small>
-                </div>
-              </label>
-            )) : confirmedEvidenceCards.length ? (
-              <small>生成只使用已确认事实，不自动投递。</small>
-            ) : (
-              <EmptyState title="没有可用证据" text="至少确认一张经历卡片后才能生成可信简历。" />
-            )}
-          </div>
+          <StudioPreparation job={selectedJob} resume={resume} cards={evidenceCards} selected={selectedEvidenceCardIds} manual={manualEvidenceSelection}
+            busy={busy.trustedTailorJobId !== null || busy.refreshDetailJobId !== null} onManual={setManualEvidenceSelection} onToggle={toggleEvidenceCard}
+            onRefresh={() => { if (selectedJob) void handleRefreshJobDetail(selectedJob); }} />
 
 
         </Panel>

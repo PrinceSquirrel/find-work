@@ -2,12 +2,13 @@
 async (page) => {
   const date = "2026-10-26T00:00:00Z";
   const card = { id: 901, source_id: null, category: "project", title: "测试真实项目", organization: "", time_range: "", situation: "", actions: ["开发接口"], results: [], skills: ["Python"], status: "confirmed", provenance_type: "user_statement", source_quote: "", quote_verified: false, user_note: "", created_at: date, updated_at: date };
-  const jobs = [901, 902].map(id => ({ id, search_run_id: 901, platform: "boss", company: "测试公司", title: `测试岗位${id}`, city: "上海", salary: "面议", description: "Python 接口开发", url: "https://example.com/job", job_type: "internship", detail_status: "complete", created_at: date, match: { score: 90, hit_reasons: [], gap_reasons: [], recommendation: "strong_apply" } }));
+  const jobs = [901, 902].map(id => ({ id, search_run_id: 901, platform: "boss", company: "测试公司", title: `测试岗位${id}`, city: "上海", salary: "面议", description: "Python 接口开发", url: "https://example.com/job", job_type: "internship", detail_status: id === 901 ? "card_only" : "detail_fetched", created_at: date, match: { score: 90, hit_reasons: [], gap_reasons: [], recommendation: "strong_apply" } }));
   let materials = [];
   let requests = 0;
   let allowGeneration;
   let empty = false;
   let noJob = false;
+  let refreshes = 0;
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   await page.route("**/api/**", async route => {
     const req = route.request();
@@ -17,8 +18,14 @@ async (page) => {
     if (path === "/api/jobs") return reply(noJob ? [] : jobs);
     if (path === "/api/evidence-cards") return reply(empty ? [] : [card]);
     if (/\/jobs\/\d+\/materials$/.test(path)) return reply(materials.filter(item => path.includes(`/${item.job_id}/`)));
+    if (path.endsWith("/refresh-detail")) {
+      refreshes++;
+      jobs[0] = { ...jobs[0], detail_status: "detail_fetched", description: "岗位职责：完整 Python 接口开发与测试要求" };
+      return reply(jobs[0]);
+    }
     if (path.endsWith("/evidence-recommendations")) return reply([{ card, score: 90, hit_reasons: ["技能匹配"] }]);
     if (path.endsWith("/evidence-tailor")) {
+      check(req.postDataJSON().evidence_card_ids.length === 0, "Default generation did not use automatic selection");
       requests++;
       if (requests === 1) return reply({ detail: "测试生成失败，可重试" }, 502);
       await new Promise(resolve => { allowGeneration = resolve; });
@@ -43,9 +50,13 @@ async (page) => {
   try {
     await page.goto("http://127.0.0.1:5173/");
     await page.getByRole("button", { name: "生成中心", exact: true }).click();
+    const preparation = page.getByRole("region", { name: "岗位与经历准备" });
+    check(await preparation.getByRole("checkbox").count() === 0, "Default mode still requires checkboxes");
     const generate = page.getByRole("button", { name: "生成求职材料", exact: true });
     await generate.click();
     await page.getByText("测试生成失败，可重试", { exact: true }).waitFor();
+    check(refreshes === 1, "Missing JD was not completed before model call");
+    await preparation.getByText("岗位职责：完整 Python 接口开发与测试要求", { exact: true }).waitFor();
     await generate.evaluate(button => { button.click(); button.click(); });
     await page.getByRole("button", { name: "推荐与生成中..." }).waitFor();
     await page.getByRole("button", { name: "岗位雷达", exact: true }).click();
@@ -78,7 +89,7 @@ async (page) => {
     empty = true;
     await page.reload();
     await page.getByRole("button", { name: "生成中心", exact: true }).click();
-    await page.getByText("没有可用证据", { exact: true }).waitFor();
+    await page.getByText("没有可用证据：请先确认一张真实项目、实习或技能卡片。", { exact: true }).waitFor();
     check(await generate.isDisabled(), "Empty evidence allowed generation");
     noJob = true;
     await page.reload();

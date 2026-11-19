@@ -3534,3 +3534,5 @@ Updated: 2026-07-03 Asia/Shanghai
 - S2 complete：新增 4 项覆盖单选两平台、新启动、复用不重复／仅补缺失页及请求校验；后端 183、前端 92、lint/build 全通过。提交 fix: launch only requested recruitment platforms，随后立即推送核对。
 - S2 提交 cfd7f94eac788865f328add9f9a6bbc04ac21d78 已同步远端一致。S3 四文件：evidence_service.py、llm_prompt_service.py、自动选择测试、本文件。空选择代表自动模式：已配置模型在原有生成调用中按 JD 选择相关经历，避免新增一次付费调用；本地模式明确规则筛选，不冒充 AI。自动模式不把教育卡片当项目勾选，原基础资料沿用；草稿／拒绝卡片不参与，输出记录实际引用，保留人审门槛。
 - S3 complete：新增 3 项覆盖自动本地／模型一次调用与引用／无相关事实；初测新测试文件未清理进程模型环境而尝试连接，已按项目惯例隔离环境，重测后端 186、前端 92、lint/build 通过。没有修改密钥或调用真实模型。提交 feat: select relevant evidence automatically during trusted generation。
+- S3 提交 366d8574146ffd8af417aa64db51ad15c2d05d0a 已同步远端一致。S4 五文件：App.tsx、StudioPreparation.tsx／测试、check-studio-flow.js、本文件。默认自动模式无逐项勾选，基础简历独立沿用；手动调整保留。生成前补全 JD，失败不调模型，切岗不调用旧岗位模型；准备区直接展示完整正文／摘要状态。启动传勾选项，提取预览上限 50；创建搜索任务后端原 8 条限制下一阶段一并修正。
+- S4 complete：进入生成中心自动读取缺失 JD；新增 4 项前端测试。合成浏览器通过默认无勾选／空选择自动调用、自动补 JD、失败重试、双击、切岗、审核定稿与刷新共 12 类检查；初次测试路由拼成 detail-refresh，改为真实 refresh-detail 后通过。后端 186、前端 96、lint/build 全通过。提交 feat: show full JD and default to automatic evidence preparation。
