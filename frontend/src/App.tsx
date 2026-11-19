@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApplicationFiltersBar, ApplicationPagination, applyApplicationFilters, EMPTY_APPLICATION_FILTERS, useApplicationQuery } from "./ApplicationTrackingControls";
 import { WorkspaceNextStep, type NextStepAction } from "./WorkspaceNextStep";
+import { EvidenceUploadForm } from "./EvidenceUploadForm";
 import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
 import { api, getTailorBlockedMessage } from "./lib/api";
 import { uploadEvidenceBatch } from "./lib/evidenceUpload";
@@ -2643,21 +2644,7 @@ function App() {
 
           {evidenceMessage ? <p className="evidence-message" role="status">{evidenceMessage}</p> : null}
 
-          <form className="evidence-upload" onSubmit={handleEvidenceUpload}>
-            <label className="file-drop evidence-file-drop">
-              <input
-                type="file"
-                multiple
-                accept=".docx,.pdf,.txt,.md,.png,.jpg,.jpeg"
-                onChange={(event) => setEvidenceFiles(Array.from(event.target.files ?? []))}
-              />
-              <span>{evidenceFiles.length ? `已选择 ${evidenceFiles.length} 份资料` : "选择个人资料文件"}</span>
-              <small>优先支持 DOCX / 可提取文字的 PDF / TXT / MD；扫描件失败后可手工补全文本。</small>
-            </label>
-            <button className="primary" type="submit" disabled={busy.boot || busy.evidenceUpload}>
-              {busy.evidenceUpload ? "上传中..." : "加入本地资料库"}
-            </button>
-          </form>
+          <EvidenceUploadForm files={evidenceFiles} busy={busy.boot || busy.evidenceUpload} onFilesChange={files => { setEvidenceFiles(files); setEvidenceMessage(null); }} onUpload={() => handleEvidenceUpload()} />
 
           <div className="evidence-source-grid">
             {evidenceSources.length ? evidenceSources.map((source) => (
