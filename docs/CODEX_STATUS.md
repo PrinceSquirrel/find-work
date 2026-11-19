@@ -3540,3 +3540,7 @@ Updated: 2026-07-03 Asia/Shanghai
 - S5 complete：新增真实 JS 执行测试（包装层不点／延迟证明／只点一次），并更新两处原 8 条预期；初测用例早于实现运行及旧上限预期失败，补齐后全量重测 187 后端／96 前端、lint/build 通过。合成真实浏览器验证预检选中 A 元素“立即沟通”，延迟已发送只点击一次并确认；未接触真人平台发送。提交 fix: target real platform actions and expand bounded job collection。
 - S5 提交 5e2fd59fc88ae83c1daa0a9794e63969276db61e 已同步远端一致。S6 五文件：App.tsx、platformApply.ts／测试、check-platform-workflow.js、本文件。页面单入口“去沟通／投递”自动预检后明确一次确认，取消不发送、同步锁防连点；聊天已打开但未发送作为可操作提示，不弹假成功／不计入投递，真实异常继续报错。浏览器验证均拦截所有写请求。
 - S6 complete：新增 4 项前端测试，模拟浏览器覆盖按平台请求、自动预检、取消零发送、一次确认、连点锁、仅聊天不计投递；后端 187、前端 100、lint/build 全通过。初次静态检查发现旧材料区仍引用移除的二次确认函数，已统一至相同安全入口并重测通过。提交 feat: automate apply preflight with one explicit sending approval。剩余联合回归、文档和正式后端重载。
+- S6 提交 fa60c1b95ff23390a68350dc872bc44bada69f46 已推送核对远端一致。S7 三文件：README.md、check-job-browser-scripts.js、本文件。补充使用方式／能力边界／来源，扩展真实浏览器合成 DOM 的按钮、延迟证明、聊天未发送和验证停止检查；后续进行全量与全站联合回归和正式服务重载，未完成前仍为 in_progress。
+- S7 QA 补充（总计五文件）：导航替换 JS 上下文时最多两次安全重读，等待正确岗位路径后读取正文；滚动过程中出现验证立即停止后续详情请求。同步新增导航竞态测试，不能以原测试结果覆盖新增修改，重跑全量后再提交。
+- 联合检查前六组均通过，但三尺寸回归发现当前长岗位链接在移动端撑开平台状态卡。为遵守每阶段五文件，README 使用说明顺延 S8，本阶段改为提取器／导航竞态测试／DOM 回归／platform-session 局部样式／状态文件，新增超长合成链接窄屏测试；没有修改全局主题。
+- S7 complete：后端全量 188、前端 100、lint/build 通过。临时服务重载最新提取脚本后，动态 JD、虚拟滚动、滚动中验证停止、最内层按钮／延迟证明／仅聊天、超长链接窄屏全部通过。其他六类流程和全站六页三尺寸回归全部通过，原仪表盘／资料页布局保持。提交 fix: harden navigation recovery and narrow-screen platform details。

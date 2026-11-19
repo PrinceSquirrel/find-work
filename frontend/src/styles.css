@@ -413,6 +413,8 @@ label span,
   display: grid;
   gap: 4px;
   padding: 9px 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .platform-session span {

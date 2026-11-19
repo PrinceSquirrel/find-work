@@ -320,8 +320,16 @@ class BrowserJobExtractorService:
         if urlparse(tab.get("url", "")).path != target.path:
             self.runtime_client.evaluate(websocket_url, self._open_job_script(url))
             sleep(0.5)
-        raw_result = self.runtime_client.evaluate(websocket_url, self._detail_refresh_script(platform, url))
-        return self._normalize_detail_refresh_result(platform, url, raw_result)
+        for attempt in range(3):
+            try:
+                raw_result = self.runtime_client.evaluate(websocket_url, self._detail_refresh_script(platform, url))
+                return self._normalize_detail_refresh_result(platform, url, raw_result)
+            except ValueError:
+                # Navigation can replace the JS context between opening the URL and reading it.
+                if attempt == 2:
+                    raise
+                sleep(0.4)
+        raise ValueError("岗位详情暂时无法读取，请稍后重试")
 
     def apply_to_job(self, platform: str, url: str) -> dict[str, object]:
         if not self.cdp_url:
@@ -1252,7 +1260,7 @@ class BrowserJobExtractorService:
   // A SPA's fetched HTML may be an empty shell. Read the authenticated, rendered page first.
   for (let attempt = 0; attempt < 12; attempt += 1) {{
     const sameJob = new URL(targetUrl, location.href).pathname === location.pathname;
-    if (!sameJob) break;
+    if (!sameJob) {{ await new Promise(resolve => setTimeout(resolve, 350)); continue; }}
     if (/请完成安全验证|拖动滑块|异常访问|请先登录|扫码登录/.test(text(document.body))) return blocked("平台要求登录或安全验证，请在浏览器中完成后重试。");
     const rendered = pickDetailText(document);
     if (rendered) return fromDocument(document, rendered, "已读取登录浏览器渲染后的完整 JD。");
@@ -1530,6 +1538,7 @@ class BrowserJobExtractorService:
   if (state) return {{ jobs: [], diagnostics: {{ page_state: state, matched_selector_counts: {{}}, candidate_card_count: 0 }} }};
   collectCandidateCards();
   await scrollForMoreCards();
+  if (pageState() === "blocked") return {{ jobs: [], diagnostics: {{ page_state: "blocked", matched_selector_counts: matchedSelectorCounts, candidate_card_count: cardSnapshots.length }} }};
   collectCandidateCards();
   const titleSelectors = [
     ".job-name",
