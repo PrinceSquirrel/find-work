@@ -1403,6 +1403,41 @@ pre {
   padding-top: 12px;
 }
 
+.job-focus-trigger {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  text-align: left;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.job-focus-trigger span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.job-focus-trigger b { color: var(--green-deep); font-size: .8rem; }
+.job-detail-modal.job-focus-dialog {
+  inset: 0;
+  display: none;
+  width: min(850px, calc(100vw - 24px));
+  max-width: none;
+  height: auto;
+  max-height: min(85dvh, 950px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--line-dark);
+  border-radius: 18px;
+  color: var(--ink);
+}
+.job-focus-dialog[open] { display: block; }
+.job-focus-dialog::backdrop { background: rgba(16, 40, 33, .62); }
+.job-focus-content { display: grid; gap: 14px; padding: clamp(14px, 4vw, 30px); overflow-wrap: anywhere; }
+.job-focus-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.75; }
+
 .status-pill {
   border: 1px solid var(--line-dark);
   border-radius: 999px;

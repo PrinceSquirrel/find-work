@@ -5,6 +5,7 @@ import { WorkspaceNextStep, type NextStepAction } from "./WorkspaceNextStep";
 import { EvidenceUploadForm } from "./EvidenceUploadForm";
 import { prepareStudioJob, StudioPreparation } from "./StudioPreparation";
 import { runPlatformApplication } from "./lib/platformApply";
+import { JobFocus, JobSummary } from "./JobFocus";
 import { evidenceCardToDraft, evidenceConfirmation, evidenceDraftPayload, splitEvidenceDraftList, type EvidenceCardDraft } from "./lib/evidenceCards";
 import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
 import { api, getTailorBlockedMessage } from "./lib/api";
@@ -2959,10 +2960,10 @@ function App() {
                       </div>
                       {application ? <small className="record-retained">已有关联投递记录，清理岗位时保留</small> : null}
                       <p>{job.company} · {job.city} · {job.salary}</p>
-                      <small>{job.description}</small>
+                      <JobSummary title={job.title} description={job.description} onOpen={() => { setSelectedJobId(job.id); setDetailJobId(job.id); }} />
                     </div>
                     <div className="score-cell">
-                      <b>{job.match.score}</b>
+                      <b title="匹配参考分，不代表录用概率。点击放大阅读查看评分依据。">{job.match.score}</b>
                       <div className="score-bar">
                         <i style={{ width: `${clampPercent(job.match.score)}%` }} />
                       </div>
@@ -3505,22 +3506,20 @@ function App() {
         </Panel>
       </section>
       {detailJob ? (
-        <div className="modal-backdrop" role="presentation" onClick={() => setDetailJobId(null)}>
-          <aside
-            className="job-detail-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="岗位要求详情"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <JobFocus onClose={() => setDetailJobId(null)}>
             <div className="modal-heading">
               <div>
                 <span>{PLATFORM_LABELS[detailJob.platform] ?? detailJob.platform}</span>
                 <h2>{detailJob.title}</h2>
                 <p>{detailJob.company || "未知公司"} · {detailJob.city || "未知城市"} · {detailJob.salary || "薪资读取失败"}</p>
               </div>
-              <button type="button" onClick={() => setDetailJobId(null)}>关闭</button>
+              <button type="button" autoFocus onClick={() => setDetailJobId(null)}>关闭</button>
             </div>
+            <section aria-label="岗位评分说明">
+              <h3>匹配参考分 {detailJob.match.score} / 100</h3>
+              <p>比较基础简历和岗位描述中的技能、经历关键词。启用的匹配模型可结合岗位职责调整规则分；模型不可用时用规则：基础 35 分、每个重点技能命中加 10 分、每个重复词项加 4 分，上限 100。没有重点技能命中时最高 45 分，缺口达到 4 项再扣 10 分。</p>
+              <small>历史岗位保留当时的评分；资料不全时分数仅供参考，不代表录用概率，也不会据此自动投递。</small>
+            </section>
             <div className="job-detail-actions">
               <a href={detailJob.url} target="_blank" rel="noreferrer">打开原岗位</a>
               <button type="button" onClick={() => void handleRefreshSessions()} disabled={busy.sessions}>
@@ -3596,8 +3595,7 @@ function App() {
                 )}
               </div>
             </section>
-          </aside>
-        </div>
+        </JobFocus>
       ) : null}
       </main>
     </div>
