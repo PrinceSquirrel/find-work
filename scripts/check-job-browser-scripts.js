@@ -15,6 +15,10 @@ async (page) => {
   await page.setContent('<div class="job-sec-text">请完成安全验证</div><p>请完成安全验证</p>');
   check((await page.evaluate(scripts.detail)).detail_status === "detail_blocked", "Verification not respected");
   await page.goto(origin + "/job_detail/synthetic.html");
+  await page.setContent('<a href="/job_detail">职位订阅</a>');
+  await page.evaluate(() => setTimeout(() => { document.body.insertAdjacentHTML('beforeend', '<article class="job-card-wrapper"><a href="/job_detail/late.html">延迟加载的真实卡片</a><span class="company-name">合成公司</span></article>'); }, 400));
+  const delayedList = await page.evaluate(scripts.extract);
+  check(delayedList.jobs.some(job => job.url.endsWith('/late.html')), "Footer subscription incorrectly ended the list-loading wait");
   await page.setContent('<div id="list" class="job-list" style="height:120px;overflow:auto"><div style="height:5000px"><article class="job-card-wrapper"><a href="/job_detail/1.html">岗位1</a><span class="company-name">合成公司</span><b class="salary">200-300元/天</b></article></div></div>');
   await page.evaluate(() => {
     let index = 1;
@@ -28,6 +32,14 @@ async (page) => {
   const extracted = await page.evaluate(scripts.extract);
   check(extracted.jobs.length >= 5 && new Set(extracted.jobs.map(job => job.url)).size === extracted.jobs.length, "Virtual scrolling lost or duplicated cards");
   check(extracted.jobs.some(job => job.url.includes('/1.html')), "Initial virtual card lost");
+  await page.setContent('<article class="job-card-wrapper"><a href="/job_detail/stalled.html">超时正文岗位</a><span class="company-name">合成公司</span></article>');
+  await page.evaluate(() => {
+    window.originalFetch = window.fetch;
+    window.fetch = async (_url, options) => ({ ok: true, text: () => new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('body timeout')))) });
+  });
+  const stalled = await page.evaluate(scripts.extract);
+  check(stalled.jobs.length === 1 && stalled.jobs[0].detail_status === 'detail_blocked', "Stalled response body did not respect timeout");
+  await page.evaluate(() => { window.fetch = window.originalFetch; });
   await page.setContent('<div id="list" class="job-list" style="height:120px;overflow:auto"><div style="height:5000px"><article class="job-card-wrapper"><a href="/job_detail/1.html">岗位1</a><span class="company-name">合成公司</span></article></div></div>');
   await page.evaluate(() => document.querySelector('#list').addEventListener('scroll', () => document.body.append('请完成安全验证'), { once: true }));
   const interrupted = await page.evaluate(scripts.extract);

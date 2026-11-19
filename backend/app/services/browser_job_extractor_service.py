@@ -101,6 +101,8 @@ class CdpRuntimeClient:
         sock.settimeout(self.EVALUATE_TIMEOUT_SECONDS)
         try:
             self._handshake(sock, host, port, path)
+            # Background/occluded tabs throttle timers and can stall bounded scroll/read scripts.
+            self._send_json(sock, {"id": 0, "method": "Page.bringToFront", "params": {}})
             self._send_json(
                 sock,
                 {
@@ -117,7 +119,7 @@ class CdpRuntimeClient:
                 message = self._recv_json(sock)
                 if message.get("id") != 1:
                     continue
-                if "exceptionDetails" in message:
+                if "exceptionDetails" in message or "exceptionDetails" in message.get("result", {}):
                     raise ValueError("CDP Runtime.evaluate failed")
                 return message.get("result", {}).get("result", {}).get("value")
         finally:
@@ -908,60 +910,9 @@ class BrowserJobExtractorService:
   const keyword = {json.dumps(keyword, ensure_ascii=False)};
   const city = {json.dumps(city.strip(), ensure_ascii=False)};
   const searchUrl = {json.dumps(search_url, ensure_ascii=False)};
-  const textInputSelectors = [
-    "input[name='query']",
-    "input[name='keyword']",
-    "input[placeholder*='职位']",
-    "input[placeholder*='岗位']",
-    "input[placeholder*='搜索']",
-    ".search-input input",
-    ".search-bar input"
-  ];
-  const cityInputSelectors = [
-    "input[name='city']",
-    "input[placeholder*='城市']",
-    ".city input",
-    ".city-select input"
-  ];
-  const buttonSelectors = [
-    "button[type='submit']",
-    ".search-btn",
-    ".btn-search",
-    "[class*='search-btn']",
-    "button"
-  ];
-  const setValue = (selectors, value) => {{
-    if (!value) return false;
-    for (const selector of selectors) {{
-      const input = document.querySelector(selector);
-      if (!input) continue;
-      input.focus?.();
-      input.value = value;
-      input.dispatchEvent(new Event("input", {{ bubbles: true }}));
-      input.dispatchEvent(new Event("change", {{ bubbles: true }}));
-      return true;
-    }}
-    return false;
-  }};
-  const keywordSet = setValue(textInputSelectors, keyword);
-  const citySet = setValue(cityInputSelectors, city);
-  let clicked = false;
-  if ((keywordSet || citySet) && (!city || citySet)) {{
-    for (const selector of buttonSelectors) {{
-      const button = document.querySelector(selector);
-      if (!button) continue;
-      const label = (button.innerText || button.textContent || "").trim();
-      if (!label || /搜|搜索|查询|确定/.test(label)) {{
-        button.click();
-        clicked = true;
-        break;
-      }}
-    }}
-  }}
-  if (!clicked || (city && !citySet)) {{
-    location.href = searchUrl;
-  }}
-  return {{ platform: {json.dumps(platform, ensure_ascii=False)}, keyword, city, clicked, url: searchUrl }};
+  // Hidden header search widgets can accept input without performing a search. Navigate explicitly.
+  location.href = searchUrl;
+  return {{ platform: {json.dumps(platform, ensure_ascii=False)}, keyword, city, clicked: false, url: searchUrl }};
 }})()
 """
 
@@ -1270,9 +1221,9 @@ class BrowserJobExtractorService:
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3500);
     const response = await fetch(targetUrl, {{ credentials: "include", signal: controller.signal }});
-    clearTimeout(timer);
     if (!response.ok) return blocked(`Detail request failed: HTTP ${{response.status}}.`);
     const html = await response.text();
+    clearTimeout(timer);
     const doc = new DOMParser().parseFromString(html, "text/html");
     const description = pickDetailText(doc);
     const bodyText = text(doc.body);
@@ -1414,7 +1365,9 @@ class BrowserJobExtractorService:
   const seenCardKeys = new Set();
   const seenSnapshotKeys = new Set();
   const matchedSelectorCounts = {{}};
-  const countCandidateNodes = () => selectors.reduce((total, selector) => total + document.querySelectorAll(selector).length, 0);
+  const countCandidateNodes = () => platform === "boss"
+    ? [...document.querySelectorAll("a[href*='/job_detail/']")].filter(link => !/职位订阅|职位搜索|岗位搜索/.test(text(link))).length
+    : selectors.reduce((total, selector) => total + document.querySelectorAll(selector).length, 0);
   const pageState = () => {{
     const visible = (node) => Boolean(node?.getClientRects().length);
     const body = text(document.body);
@@ -1423,7 +1376,7 @@ class BrowserJobExtractorService:
     return empty ? "empty_results" : "";
   }};
   const waitForCandidateCards = async () => {{
-    for (let attempt = 0; attempt < 12; attempt += 1) {{
+    for (let attempt = 0; attempt < 20; attempt += 1) {{
       if (pageState()) return false;
       if (countCandidateNodes() > 0) return true;
       await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1638,7 +1591,6 @@ class BrowserJobExtractorService:
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 1800);
       const response = await fetch(url, {{ credentials: "include", signal: controller.signal }});
-      clearTimeout(timer);
       if (!response.ok) {{
         return {{
           description: "",
@@ -1648,6 +1600,7 @@ class BrowserJobExtractorService:
         }};
       }}
       const html = await response.text();
+      clearTimeout(timer);
       const doc = new DOMParser().parseFromString(html, "text/html");
       const description = pickDetailText(doc);
       return {{
@@ -1665,7 +1618,8 @@ class BrowserJobExtractorService:
       }};
     }}
   }};
-  const livePayloads = await Promise.all(cards.slice(0, limit).map(async (card) => {{
+  // Collect up to the requested list limit, but enrich only a small batch; selected jobs use rendered JD.
+  const livePayloads = await Promise.all(cards.slice(0, Math.min(limit, 8)).map(async (card) => {{
     const link = preferredLink(card);
     const url = absolute(link?.getAttribute("href"));
     const cardDescription = text(card).slice(0, 1200);

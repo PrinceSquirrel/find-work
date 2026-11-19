@@ -1,6 +1,9 @@
+import json
+import subprocess
+
 import pytest
 
-from app.services.browser_job_extractor_service import BrowserJobExtractorService
+from app.services.browser_job_extractor_service import BrowserJobExtractorService, CdpRuntimeClient
 
 
 def test_detail_refresh_navigates_to_correct_platform_job(monkeypatch):
@@ -43,3 +46,30 @@ def test_detail_refresh_retries_replaced_navigation_context(monkeypatch):
     monkeypatch.setattr(service.runtime_client, "evaluate", evaluate)
     assert service.refresh_job_detail("boss", target).detail_status == "detail_fetched"
     assert len(calls) == 2
+
+
+def test_search_navigates_to_explicit_url_instead_of_hidden_controls():
+    service = BrowserJobExtractorService(cdp_url="http://127.0.0.1:9222")
+    script = service._search_script("boss", ["产品经理"], "上海")
+    harness = "globalThis.location={href:'https://www.zhipin.com/job_detail/old.html'};globalThis.document={querySelector:()=>{throw Error('Hidden control used')}};"
+    result = subprocess.run(["node", "--input-type=module", "-e", harness + "await " + script + ";console.log(JSON.stringify(location.href));"], capture_output=True, text=True, encoding="utf-8", check=True)
+    assert json.loads(result.stdout) == service._search_url("boss", "产品经理", "上海")
+    script = service._extract_script("boss", 50)
+    assert "Math.min(limit, 8)" in script
+    assert "link => !/职位订阅|职位搜索|岗位搜索/" in script
+    assert script.index("const html = await response.text()") < script.index("clearTimeout(timer)")
+
+
+def test_runtime_activates_target_before_waiting_for_timers(monkeypatch):
+    class Socket:
+        def settimeout(self, *_): pass
+        def close(self): pass
+    monkeypatch.setattr("app.services.browser_job_extractor_service.socket.create_connection", lambda *_args, **_kwargs: Socket())
+    client = CdpRuntimeClient()
+    sent = []
+    monkeypatch.setattr(client, "_handshake", lambda *_: None)
+    monkeypatch.setattr(client, "_send_json", lambda _sock, message: sent.append(message))
+    replies = iter([{"id": 0, "result": {}}, {"id": 1, "result": {"result": {"value": "ready"}}}])
+    monkeypatch.setattr(client, "_recv_json", lambda _: next(replies))
+    assert client.evaluate("ws://127.0.0.1/test", "expression") == "ready"
+    assert [item["method"] for item in sent] == ["Page.bringToFront", "Runtime.evaluate"]
