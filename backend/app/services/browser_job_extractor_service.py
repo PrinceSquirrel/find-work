@@ -307,6 +307,9 @@ class BrowserJobExtractorService:
         hosts = PLATFORM_HOSTS.get(platform)
         if not hosts:
             raise ValueError(f"Unsupported platform: {platform}")
+        target = urlparse(url)
+        if target.scheme != "https" or not any(target.hostname == host or (target.hostname or "").endswith(f".{host}") for host in hosts):
+            raise ValueError("岗位详情必须来自所选招聘平台的 HTTPS 页面")
         tabs = self._load_tabs()
         tab = self._find_platform_tab(tabs, hosts)
         if tab is None:
@@ -314,6 +317,9 @@ class BrowserJobExtractorService:
         websocket_url = tab.get("webSocketDebuggerUrl")
         if not websocket_url:
             raise ValueError(f"The detected {platform} tab has no websocket endpoint.")
+        if urlparse(tab.get("url", "")).path != target.path:
+            self.runtime_client.evaluate(websocket_url, self._open_job_script(url))
+            sleep(0.5)
         raw_result = self.runtime_client.evaluate(websocket_url, self._detail_refresh_script(platform, url))
         return self._normalize_detail_refresh_result(platform, url, raw_result)
 
@@ -1195,6 +1201,11 @@ class BrowserJobExtractorService:
     return [...new Set(values)].slice(0, 24);
   }};
   const pickDetailText = (doc) => {{
+    // Prefer the actual JD section over page wrappers containing navigation and other jobs.
+    for (const selector of [".job-sec-text", ".job-description", ".job_msg", ".position-detail"]) {{
+      const sections = [...doc.querySelectorAll(selector)].map(text).filter(value => value.length >= 60 && !isLoadingShellText(value));
+      if (sections.length) return sections.join("\\n").slice(0, 12000);
+    }}
     const values = [];
     for (const selector of detailSelectors) {{
       for (const node of Array.from(doc.querySelectorAll(selector))) {{
@@ -1207,8 +1218,8 @@ class BrowserJobExtractorService:
       if (value && value.length > 50 && detailKeywordPattern.test(value)) values.push(value);
     }}
     const uniqueValues = [...new Set(values)].sort((left, right) => right.length - left.length);
-    const picked = uniqueValues.find((value) => value.length > 80) || uniqueValues[0] || text(doc.body);
-    const result = (picked || "").slice(0, 3000);
+    const picked = uniqueValues.find((value) => value.length > 80 && detailKeywordPattern.test(value));
+    const result = (picked || "").slice(0, 12000);
     return isLoadingShellText(result) ? "" : result;
   }};
   const blocked = (reason) => ({{
@@ -1225,6 +1236,23 @@ class BrowserJobExtractorService:
     detail_reason: reason
   }});
   if (!targetUrl) return blocked("Job has no source URL.");
+  const fromDocument = (doc, description, reason) => ({{
+    title: firstText(doc, titleSelectors) || doc.title || targetUrl,
+    company: firstText(doc, companySelectors), city: firstText(doc, citySelectors),
+    salary: firstText(doc, salarySelectors), salary_candidates: collectCandidates(doc.body || doc, salarySelectors),
+    detail_description: description, description, url: absolute(targetUrl),
+    job_type: platform === "boss" ? "boss_browser" : "shixiseng_browser",
+    detail_status: description ? "detail_fetched" : "low_quality", detail_reason: reason
+  }});
+  // A SPA's fetched HTML may be an empty shell. Read the authenticated, rendered page first.
+  for (let attempt = 0; attempt < 12; attempt += 1) {{
+    const sameJob = new URL(targetUrl, location.href).pathname === location.pathname;
+    if (!sameJob) break;
+    if (/请完成安全验证|拖动滑块|异常访问|请先登录|扫码登录/.test(text(document.body))) return blocked("平台要求登录或安全验证，请在浏览器中完成后重试。");
+    const rendered = pickDetailText(document);
+    if (rendered) return fromDocument(document, rendered, "已读取登录浏览器渲染后的完整 JD。");
+    await new Promise(resolve => setTimeout(resolve, 350));
+  }}
   try {{
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3500);
@@ -1417,9 +1445,9 @@ class BrowserJobExtractorService:
   const cardKey = (card) => {{
     const link = card.matches?.(fallbackLinkSelector) ? card : card.querySelector?.(fallbackLinkSelector) || card.querySelector?.("a[href]");
     const href = absolute(link?.getAttribute?.("href") || "");
-    return href || text(card).slice(0, 240);
+    return href.split("?")[0] || text(card).slice(0, 240);
   }};
-  const snapshotKey = (payload) => payload.url || (payload.description || "").slice(0, 240);
+  const snapshotKey = (payload) => payload.url?.split("?")[0] || (payload.description || "").slice(0, 240);
   const snapshotCandidateCard = (card) => {{
     const link = card.matches?.(fallbackLinkSelector) ? card : card.querySelector?.(fallbackLinkSelector) || card.querySelector?.("a[href]");
     const description = text(card).slice(0, 1200);
@@ -1444,7 +1472,7 @@ class BrowserJobExtractorService:
     const recovered = platform === "boss" && node.matches?.(fallbackLinkSelector) ? bossCardRootFromLink(node) : null;
     const card = recovered || node.closest?.(cardRootSelector) || node;
     const key = cardKey(card);
-    if (!seenCards.has(card) && (!key || !seenCardKeys.has(key))) {{
+    if (key && !seenCardKeys.has(key) && (platform !== "boss" || key.includes("/job_detail/"))) {{
       seenCards.add(card);
       if (key) seenCardKeys.add(key);
       cards.push(card);
@@ -1467,15 +1495,17 @@ class BrowserJobExtractorService:
     for (const link of fallbackLinks) pushCard(link);
   }};
   const scrollForMoreCards = async () => {{
-    if (platform !== "boss") return;
     const scrollContainers = [
       document.scrollingElement,
       document.documentElement,
       document.body,
       ...Array.from(document.querySelectorAll("[class*='job-list'],[class*='jobList'],[class*='search-job'],[class*='searchJob'],[class*='list'],[class*='scroll']"))
     ].filter(Boolean);
-    for (let round = 0; round < 4 && cards.length < limit; round += 1) {{
+    let idleRounds = 0;
+    for (let round = 0; round < 20 && cardSnapshots.length < limit && idleRounds < 3; round += 1) {{
+      if (pageState()) break;
       collectCandidateCards();
+      const before = cardSnapshots.length;
       for (const scroller of scrollContainers) {{
         const maxTop = Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0));
         const currentTop = scroller.scrollTop || 0;
@@ -1484,7 +1514,9 @@ class BrowserJobExtractorService:
         }}
       }}
       window.scrollBy?.(0, 900);
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      collectCandidateCards();
+      idleRounds = cardSnapshots.length === before ? idleRounds + 1 : 0;
     }}
     collectCandidateCards();
   }};
@@ -1619,7 +1651,7 @@ class BrowserJobExtractorService:
       }};
     }}
   }};
-  const livePayloads = await Promise.all(cards.slice(0, limit * 4).map(async (card) => {{
+  const livePayloads = await Promise.all(cards.slice(0, limit).map(async (card) => {{
     const link = preferredLink(card);
     const url = absolute(link?.getAttribute("href"));
     const cardDescription = text(card).slice(0, 1200);

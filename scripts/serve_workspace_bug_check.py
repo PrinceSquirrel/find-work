@@ -26,7 +26,16 @@ def main():
         def script():
             return {"script": BrowserJobExtractorService(cdp_url="http://127.0.0.1:9222")._extract_script("boss", 8)}
 
-        uvicorn.run(app, host="127.0.0.1", port=8768, log_level="warning")
+        @app.get("/__job_scripts")
+        def job_scripts():
+            service = BrowserJobExtractorService(cdp_url="http://127.0.0.1:9222")
+            url = "http://127.0.0.1:8768/job_detail/synthetic.html"
+            return {"detail": service._detail_refresh_script("boss", url), "extract": service._extract_script("boss", 8)}
+
+        try:
+            uvicorn.run(app, host="127.0.0.1", port=8768, log_level="warning")
+        finally:
+            os.chdir(project)
 
 
 if __name__ == "__main__":

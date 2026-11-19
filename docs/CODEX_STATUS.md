@@ -3522,3 +3522,11 @@ Updated: 2026-07-03 Asia/Shanghai
 - 联合回归：第二处原生选择 6 组再次通过，既有上传失败／本地恢复 9 组和六页三尺寸布局检查通过。正式页只读验证 12 张已确认卡片全部禁用重复确认，按钮能打开原生选择框，全程 0 写请求。
 - 已备份正式库到 output/before-three-bug-fixes-db027766-3590-4363-8d05-76c53c2c6e04.sqlite3，空闲时重载后端并复用前端；后端进程树含其启动的专用求职浏览器，重载时一并关闭后已通过原启动入口恢复，9222 连接正常，独立 HTTP 实测 BOSS success／4 岗位。首个手工 HTTP 检查将 keywords 误传字符串得到 422，改为列表；PowerShell 摘要字段读取异常改用 Python 独立 HTTP 校验通过，不把空摘要当成功。
 - 正式资料／经历卡片／岗位／投递行与备份逐行比较一致，未改密钥、未发送招呼或投递。三处缺陷均已验证，无剩余实现项；刷新 http://127.0.0.1:5173/ 使用，启动仍为 .\scripts\start-project.ps1 -SkipInstall。提交 fix: disable repeated evidence confirmation and support reconfirmation，随后立即推送核对远端；本阶段仅提交上述五文件，用户其他文件和运行数据保留。
+
+## 2026-11-19：JD／自动推荐／按平台启动／投递体验修复（in_progress）
+
+- 本轮三图获授权；跟踪文件干净，用户 output/ 和文本文件保留。只读确认 BOSS 动态页面有 327 字 JD，现代码仅 fetch 静态壳，导致误判；滚动只四轮且复用 DOM 时漏掉新卡片。
+- 边界：自动收集／推荐／只读预检；真实发送仍需明确确认，不会把点击按钮／打开聊天当投递成功，不绕过登录和验证码，不做无限抓取。参考项目 https://github.com/VedantSagare/job-application-agent 和 https://github.com/Nanduu24/jobagent 的 JD→自动匹配→人审模式；仅借鉴流程，未引入依赖／代码。
+- 分阶段每次最多五文件并全量验证提交同步：①渲染 JD 与有界虚拟滚动；②按平台启动接口／页面；③自动经历选择与展示 JD；④简化投递及安全结果状态；⑤联合回归与使用说明。
+- 第一阶段五文件：browser_job_extractor_service.py、test_rendered_job_workflow.py、临时服务、浏览器 DOM 回归、本文件。详情先进入正确岗位并等待渲染，拒绝非平台 HTTPS URL；虚拟列表按岗位键保存快照，最多 20 轮／三轮无新增／目标上限停止。临时服务退出恢复 cwd 便于 Windows 清理。后续尚未实现，不标完成。
+- S1 complete：后端 179、前端 92、lint/build、diff 和脚本语法通过。真实登录页只读验证得到 327 字 JD；合成浏览器验证 SPA 动态正文、验证码停止、复用同一 DOM 下收集 7 个不同岗位且保留首条。提交 fix: read rendered job descriptions and retain virtual-list snapshots 后立即同步；其余阶段继续。
