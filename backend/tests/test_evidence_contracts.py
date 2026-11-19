@@ -1,4 +1,7 @@
-from app.schemas import EvidenceCard, EvidenceSource, JobPosting
+import pytest
+
+from app.schemas import EvidenceCard, EvidenceCardUpdate, EvidenceSource, JobPosting
+from app.services.evidence_service import EvidenceService
 from app.services.llm_prompt_service import LLMPromptService
 from app.storage import SQLiteStore
 
@@ -59,3 +62,44 @@ def test_evidence_prompts_keep_document_untrusted_and_reference_card_ids() -> No
     assert '"id": 17' in tailor_prompt
     assert "测试开发工程师" in tailor_prompt
     assert "只能使用输入卡片的 id" in tailor_prompt
+
+
+def test_repeated_confirmation_is_normalized_and_does_not_write(tmp_path, monkeypatch) -> None:
+    store = SQLiteStore(tmp_path / "confirmation.db")
+    service = EvidenceService(store)
+    card = store.create_evidence_card(EvidenceCard(
+        title="接口测试", actions=["编写测试"], status="draft", provenance_type="user_statement",
+    ))
+    confirmed = service.update_card(card.id, EvidenceCardUpdate(status="confirmed"))
+    assert confirmed.status == "confirmed"
+    original_update = store.update_evidence_card
+    writes = []
+
+    def record_update(updated):
+        writes.append(updated)
+        return original_update(updated)
+
+    monkeypatch.setattr(store, "update_evidence_card", record_update)
+    repeated = service.update_card(card.id, EvidenceCardUpdate(
+        title=" 接口测试 ", actions=[" 编写测试 ", ""], status="confirmed",
+    ))
+    assert repeated == confirmed
+    assert store.get_evidence_card(card.id).updated_at == confirmed.updated_at
+    assert writes == []
+    changed = service.update_card(card.id, EvidenceCardUpdate(title="接口回归测试", status="confirmed"))
+    assert changed.title == "接口回归测试"
+    assert len(writes) == 1
+
+
+def test_repeated_confirmation_still_checks_document_quote(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "quote-confirmation.db")
+    source = store.create_evidence_source(EvidenceSource(
+        filename="test.txt", file_type="txt", raw_text="实际负责接口测试。",
+    ), b"synthetic")
+    card = store.create_evidence_card(EvidenceCard(
+        source_id=source.id, title="接口测试", status="confirmed", provenance_type="document",
+        source_quote="原文不存在的内容", quote_verified=True,
+    ))
+    with pytest.raises(ValueError, match="原文"):
+        EvidenceService(store).update_card(card.id, EvidenceCardUpdate(status="confirmed"))
+    assert store.get_evidence_card(card.id).updated_at == card.updated_at

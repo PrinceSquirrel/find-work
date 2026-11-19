@@ -158,6 +158,10 @@ class EvidenceService:
             if updates.get("status", card.status) == "confirmed" and start < 0:
                 raise ValueError("文件证据引用必须能在资料原文中找到，当前卡片不能确认")
 
+        # Repeated confirmation must not rewrite timestamps or invalidate downstream reviews.
+        # Source validation above still runs even when the requested facts look unchanged.
+        if all(getattr(card, field) == value for field, value in updates.items()):
+            return card
         updated = card.model_copy(update={**updates, "updated_at": datetime.now(UTC)})
         return self.store.update_evidence_card(updated)
 
