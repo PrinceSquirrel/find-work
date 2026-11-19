@@ -410,6 +410,18 @@ export const api = {
     return request<AgentModelRoutesResponse>("/api/model-routes");
   },
 
+  applyModelRouteProfile(agentName: string, profileId: number): Promise<AgentModelRoute> {
+    return request(`/api/model-routes/${encodeURIComponent(agentName)}/profiles/${profileId}`, { method: "POST" });
+  },
+
+  resetModelRoute(agentName: string): Promise<AgentModelRoute> {
+    return request(`/api/model-routes/${encodeURIComponent(agentName)}`, { method: "DELETE" });
+  },
+
+  testModelRoute(agentName: string): Promise<ModelConfigTestResult> {
+    return request(`/api/model-routes/${encodeURIComponent(agentName)}/test`, { method: "POST" });
+  },
+
   updateModelRoute(agentName: string, payload: ModelConfigUpdate): Promise<AgentModelRoute> {
     return request<AgentModelRoute>(`/api/model-routes/${encodeURIComponent(agentName)}`, {
       method: "PUT",

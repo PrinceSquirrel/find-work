@@ -810,6 +810,7 @@ function App() {
         output_price_per_million: saved.output_price_per_million
       });
       setModelMessage(saved.api_key_configured ? `模型已接入：${saved.model}，${keyStatusText(saved)}。` : "已保存配置，但还没有 API Key。");
+      setModelRoutes((await api.getModelRoutes()).routes);
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     }
@@ -888,6 +889,7 @@ function App() {
       setModelApiKey("");
       setModelTestResult(null);
       setModelMessage(`已套用模型档案到当前全局配置：${saved.model}，${keyStatusText(saved)}。`);
+      setModelRoutes((await api.getModelRoutes()).routes);
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
@@ -938,6 +940,7 @@ function App() {
       setModelDraft(toModelConfigUpdate(saved));
       setModelApiKey("");
       setModelMessage(saved.api_key_configured ? `已删除本地保存 Key，当前仍显示为已配置：${keyStatusText(saved)}。` : "已删除当前保存的 API Key。");
+      setModelRoutes((await api.getModelRoutes()).routes);
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
@@ -1014,22 +1017,43 @@ function App() {
       setError("请先选择一个已保存的模型档案。");
       return;
     }
-    const nextDraft = toModelConfigUpdate(profile);
     setBusy((current) => ({ ...current, modelRouteAgent: agentName }));
     setError(null);
     setModelRouteMessage(null);
     try {
-      const saved = await api.updateModelRoute(agentName, nextDraft);
+      const saved = await api.applyModelRouteProfile(agentName, profile.id);
       setModelRoutes((current) => {
         const nextRoutes = current.filter((route) => route.agent_name !== saved.agent_name);
         return [...nextRoutes, saved].sort((left, right) => left.agent_name.localeCompare(right.agent_name));
       });
       setModelRouteDrafts((current) => ({ ...current, [saved.agent_name]: toModelConfigUpdate(saved) }));
-      setModelRouteMessage(`${MODEL_ROUTE_AGENT_LABELS[saved.agent_name] ?? saved.agent_name} 已套用模型档案 ${profile.name}`);
+      setModelRouteMessage(`${MODEL_ROUTE_AGENT_LABELS[saved.agent_name] ?? saved.agent_name} 已套用 ${profile.name}；${saved.api_key_configured ? "已找到可用配置，连通性待测试" : "缺少 Key，请配置档案或恢复默认"}。`);
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
       setBusy((current) => ({ ...current, modelRouteAgent: null }));
+    }
+  }
+
+  async function handleModelRouteAction(agentName: string, action: "test" | "reset") {
+    if (busy.modelRouteAgent) return;
+    setBusy(current => ({ ...current, modelRouteAgent: agentName }));
+    setModelRouteMessage(null);
+    const label = MODEL_ROUTE_AGENT_LABELS[agentName] ?? agentName;
+    try {
+      if (action === "reset") {
+        const saved = await api.resetModelRoute(agentName);
+        setModelRoutes(current => current.map(route => route.agent_name === agentName ? saved : route));
+        setModelRouteDrafts(current => ({ ...current, [agentName]: toModelConfigUpdate(saved) }));
+        setModelRouteMessage(`${label}：已恢复默认。`);
+      } else {
+        const result = await api.testModelRoute(agentName);
+        setModelRouteMessage(`${label} · ${result.model}：${result.status === "success" ? "连接成功" : result.error || "连接失败"}`);
+      }
+    } catch (error) {
+      setModelRouteMessage(`${label}：${toErrorMessage(error)}`);
+    } finally {
+      setBusy(current => ({ ...current, modelRouteAgent: null }));
     }
   }
 
@@ -1806,6 +1830,7 @@ function App() {
   }
 
   function activateWorkspaceModule(moduleId: WorkspaceModule, trigger?: HTMLButtonElement) {
+    if (moduleId !== activeModule) setError(null);
     setActiveModule(moduleId);
     trigger?.blur();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2273,16 +2298,23 @@ function App() {
             ) : null}
             {modelMessage ? <small className="model-message">{modelMessage}</small> : null}
             <details className="advanced-model-routes">
-              <summary>高级：不同 Agent 使用不同模型</summary>
+              <summary>按任务查看实际模型与连接</summary>
+              <p>先保存并测试主模型。招呼语、材料生成和岗位匹配默认沿用主模型；其他任务以实际执行方式为准。Key 已配置不等于已连接。</p>
               <div className="model-route-simple-list">
                 {modelRoutes.map((route) => {
                   const selectedRouteProfileId = modelRouteProfileSelections[route.agent_name] ?? "";
+                  const usesModel = ["ApplicationWriterAgent", "JobMatchAgent"].includes(route.agent_name);
                   return (
                     <div className="model-route-simple" key={route.agent_name}>
                       <div>
                         <b>{MODEL_ROUTE_AGENT_LABELS[route.agent_name] ?? route.agent_name}</b>
-                        <small>当前：{route.model} · {keyStatusText(route)}</small>
+                        <small>{!usesModel ? "当前流程本地执行，不依赖外部模型" : `${route.model} · ${route.inherited ? "继承主模型" : route.uses_default_key ? "同地址复用主模型 Key" : "独立配置"} · ${route.api_key_configured ? "Key 已配置" : "无 Key，使用本地规则"}`}</small>
+                        {usesModel ? <div className="job-detail-actions">
+                          <button type="button" disabled={!!busy.modelRouteAgent || !route.enabled || route.estimation_only || !route.api_key_configured} onClick={() => void handleModelRouteAction(route.agent_name, "test")}>测试此任务</button>
+                          <button type="button" disabled={!!busy.modelRouteAgent || route.inherited} onClick={() => void handleModelRouteAction(route.agent_name, "reset")}>恢复默认</button>
+                        </div> : null}
                       </div>
+                      {usesModel ? <>
                       <select
                         value={selectedRouteProfileId}
                         onChange={(event) =>
@@ -2302,15 +2334,16 @@ function App() {
                       <button
                         type="button"
                         onClick={() => void handleApplyProfileToModelRoute(route.agent_name)}
-                        disabled={!selectedRouteProfileId || busy.modelRouteAgent === route.agent_name}
+                        disabled={!selectedRouteProfileId || !!busy.modelRouteAgent}
                       >
                         {busy.modelRouteAgent === route.agent_name ? "保存中..." : "套用到此 Agent"}
                       </button>
+                      </> : null}
                     </div>
                   );
                 })}
               </div>
-              {modelRouteMessage ? <small>{modelRouteMessage}</small> : null}
+              {modelRouteMessage ? <small role="status">{modelRouteMessage}</small> : null}
             </details>
           </Panel>
 

@@ -358,6 +358,8 @@ export interface SystemHealthResponse {
 
 export interface AgentModelRoute extends ModelConfig {
   agent_name: string;
+  inherited?: boolean;
+  uses_default_key?: boolean;
 }
 
 export interface AgentModelRoutesResponse {

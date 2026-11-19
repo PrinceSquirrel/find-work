@@ -4,6 +4,17 @@ import { ApiError, api, getTailorBlockedMessage } from "./api";
 import type { ModelConfigUpdate } from "../types";
 
 describe("api client", () => {
+  test("applies agent profiles by id without exposing a key in the browser", async () => {
+    const call = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    await api.applyModelRouteProfile("ApplicationWriterAgent", 7);
+    await api.testModelRoute("ApplicationWriterAgent");
+    await api.resetModelRoute("ApplicationWriterAgent");
+    expect(call.mock.calls.map(([path, init]) => [path, init?.method, init?.body])).toEqual([
+      ["/api/model-routes/ApplicationWriterAgent/profiles/7", "POST", undefined],
+      ["/api/model-routes/ApplicationWriterAgent/test", "POST", undefined],
+      ["/api/model-routes/ApplicationWriterAgent", "DELETE", undefined],
+    ]);
+  });
   test("application query encodes literal filters and passes cancellation without changing the old endpoint", async () => {
     const body = { items: [], total: 0, page: 1, page_size: 50, pages: 0, statistics_scope: "all_applications" };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => body } as Response);
