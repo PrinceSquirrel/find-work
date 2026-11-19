@@ -821,10 +821,27 @@ class SQLiteStore:
             )
         )
 
+    def apply_profile_to_agent(self, agent_name: str, profile_id: int) -> AgentModelRoute:
+        self._validate_model_route_agent(agent_name)
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM model_profiles WHERE id = ?", (profile_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Model profile not found: {profile_id}")
+        profile = self._model_profile_from_row(row)
+        update = ModelConfigUpdate(**profile.model_dump(), api_key=profile.api_key)
+        # An empty profile key must not silently retain the previous provider's private key.
+        return self.save_agent_model_route(agent_name, update, replace_secret=True)
+
+    def reset_agent_model_route(self, agent_name: str) -> AgentModelRoute:
+        self._validate_model_route_agent(agent_name)
+        with self._connect() as conn:
+            conn.execute("DELETE FROM agent_model_routes WHERE agent_name = ?", (agent_name,))
+        return self._default_agent_model_route(agent_name)
+
     def list_agent_model_routes(self) -> list[AgentModelRoute]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM agent_model_routes").fetchall()
-        stored = {row["agent_name"]: self._agent_model_route_from_row(row) for row in rows}
+        stored = {row["agent_name"]: self._with_default_route_key(self._agent_model_route_from_row(row)) for row in rows}
         return [stored.get(agent_name) or self._default_agent_model_route(agent_name) for agent_name in MODEL_ROUTE_AGENTS]
 
     def get_agent_model_route(self, agent_name: str) -> AgentModelRoute:
@@ -833,15 +850,31 @@ class SQLiteStore:
             row = conn.execute("SELECT * FROM agent_model_routes WHERE agent_name = ?", (agent_name,)).fetchone()
         if row is None:
             return self._default_agent_model_route(agent_name)
-        return self._agent_model_route_from_row(row)
+        return self._with_default_route_key(self._agent_model_route_from_row(row))
 
-    def save_agent_model_route(self, agent_name: str, update: ModelConfigUpdate) -> AgentModelRoute:
+    def _with_default_route_key(self, route: AgentModelRoute) -> AgentModelRoute:
+        if route.api_key_configured or route.api_key_env_var or not route.enabled or route.estimation_only:
+            return route
+        default = self.get_model_config()
+        if not default.enabled or default.estimation_only or not default.api_key_configured:
+            return route
+        if route.provider != default.provider or route.base_url.rstrip("/") != default.base_url.rstrip("/"):
+            return route
+        return route.model_copy(update={
+            "api_key": default.api_key,
+            "api_key_env_var": default.api_key_env_var,
+            "api_key_configured": True,
+            "api_key_masked": default.api_key_masked,
+            "uses_default_key": True,
+        })
+
+    def save_agent_model_route(self, agent_name: str, update: ModelConfigUpdate, *, replace_secret: bool = False) -> AgentModelRoute:
         self._validate_model_route_agent(agent_name)
         update_payload = update.model_dump()
         update_payload["model"] = _normalize_model_name(update_payload["model"])
         api_key_ciphertext, api_key_masked = self._resolve_model_secret(
             update.api_key,
-            self._current_model_secret("agent_model_routes", "agent_name = ?", (agent_name,)),
+            ("", "") if replace_secret else self._current_model_secret("agent_model_routes", "agent_name = ?", (agent_name,)),
         )
         api_key = self._decrypt_api_key(api_key_ciphertext)
         update_payload.pop("api_key", None)
@@ -893,7 +926,7 @@ class SQLiteStore:
                     route.updated_at.isoformat(),
                 ),
             )
-        return route
+        return self._with_default_route_key(route)
 
     def create_resume(self, resume: ResumeDraft, original_file_bytes: bytes | None = None) -> ResumeDraft:
         with self._connect() as conn:
@@ -2037,11 +2070,11 @@ class SQLiteStore:
 
     def _default_agent_model_route(self, agent_name: str) -> AgentModelRoute:
         self._validate_model_route_agent(agent_name)
-        if agent_name in {"OrchestratorAgent", "ApplicationWriterAgent"}:
+        if agent_name in {"OrchestratorAgent", "ApplicationWriterAgent", "JobMatchAgent"}:
             config = self.get_model_config()
             payload = config.model_dump()
             payload["api_key"] = config.api_key
-            return AgentModelRoute(agent_name=agent_name, **payload)
+            return AgentModelRoute(agent_name=agent_name, inherited=True, **payload)
         return AgentModelRoute(
             agent_name=agent_name,
             provider="local",

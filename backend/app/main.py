@@ -175,7 +175,9 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
 
     @app.post("/api/model-config/test")
     def test_model_config_connection():
-        config = app.state.service.store.get_model_config()
+        return test_effective_model(app.state.service.store.get_model_config())
+
+    def test_effective_model(config):
         try:
             result = OpenAICompatibleClient().test_connection(config)
             result["api_key_configured"] = config.api_key_configured
@@ -198,6 +200,29 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     def update_model_route(agent_name: str, payload: ModelConfigUpdate):
         try:
             return app.state.service.store.save_agent_model_route(agent_name, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/model-routes/{agent_name}/profiles/{profile_id}")
+    def apply_profile_to_route(agent_name: str, profile_id: int):
+        try:
+            return app.state.service.store.apply_profile_to_agent(agent_name, profile_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/model-routes/{agent_name}")
+    def reset_model_route(agent_name: str):
+        try:
+            return app.state.service.store.reset_agent_model_route(agent_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/model-routes/{agent_name}/test")
+    def test_model_route(agent_name: str):
+        try:
+            return test_effective_model(app.state.service.store.get_agent_model_route(agent_name))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

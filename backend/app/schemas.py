@@ -265,6 +265,8 @@ class ModelProfilesResponse(BaseModel):
 
 class AgentModelRoute(ModelConfig):
     agent_name: str
+    inherited: bool = False
+    uses_default_key: bool = False
 
 
 class AgentModelRoutesResponse(BaseModel):
