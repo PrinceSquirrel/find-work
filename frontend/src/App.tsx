@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApplicationFiltersBar, ApplicationPagination, applyApplicationFilters, EMPTY_APPLICATION_FILTERS, useApplicationQuery } from "./ApplicationTrackingControls";
 import { WorkspaceNextStep, type NextStepAction } from "./WorkspaceNextStep";
 import { EvidenceUploadForm } from "./EvidenceUploadForm";
+import { evidenceCardToDraft, evidenceConfirmation, evidenceDraftPayload, splitEvidenceDraftList, type EvidenceCardDraft } from "./lib/evidenceCards";
 import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
 import { api, getTailorBlockedMessage } from "./lib/api";
 import { uploadEvidenceBatch } from "./lib/evidenceUpload";
@@ -229,18 +230,6 @@ const initialBusy: BusyState = {
   trustedFinalizeId: null
 };
 
-type EvidenceCardDraft = {
-  title: string;
-  category: string;
-  organization: string;
-  time_range: string;
-  situation: string;
-  actions: string;
-  results: string;
-  skills: string;
-  user_note: string;
-};
-
 const emptyEvidenceCardDraft: EvidenceCardDraft = {
   title: "",
   category: "project",
@@ -289,27 +278,6 @@ function withModelApiKey(draft: ModelConfigUpdate, apiKey: string): ModelConfigU
   };
 }
 
-function evidenceCardToDraft(card: EvidenceCard): EvidenceCardDraft {
-  return {
-    title: card.title,
-    category: card.category,
-    organization: card.organization,
-    time_range: card.time_range,
-    situation: card.situation,
-    actions: card.actions.join("\n"),
-    results: card.results.join("\n"),
-    skills: card.skills.join("、"),
-    user_note: card.user_note
-  };
-}
-
-function splitEvidenceDraftList(value: string): string[] {
-  return value
-    .split(/[\n,，、]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function App() {
   const [activeModule, setActiveModule] = useState<WorkspaceModule>("dashboard");
   const [featureQuery, setFeatureQuery] = useState("");
@@ -352,6 +320,7 @@ function App() {
   const evidenceDialog = useRef<HTMLDialogElement>(null);
   const evidenceUploadLock = useRef(false);
   const evidenceExtractionLock = useRef(false);
+  const evidenceCardSaveLock = useRef(false);
   const workspaceRefreshVersion = useRef(0);
   const [workspaceLoadFailed, setWorkspaceLoadFailed] = useState(false);
   const studioLock = useRef(false);
@@ -1611,19 +1580,14 @@ function App() {
 
   async function handleSaveEvidenceCard(card: EvidenceCard, status = card.status) {
     const draft = evidenceCardDrafts[card.id] ?? evidenceCardToDraft(card);
+    if (evidenceCardSaveLock.current || (status === "confirmed" && evidenceConfirmation(card, draft).disabled)) return;
+    // Lock immediately, before React renders a disabled button, to stop rapid repeat requests.
+    evidenceCardSaveLock.current = true;
     setBusy((current) => ({ ...current, evidenceCardId: card.id }));
     setError(null);
     try {
       await api.updateEvidenceCard(card.id, {
-        title: draft.title,
-        category: draft.category,
-        organization: draft.organization,
-        time_range: draft.time_range,
-        situation: draft.situation,
-        actions: splitEvidenceDraftList(draft.actions),
-        results: splitEvidenceDraftList(draft.results),
-        skills: splitEvidenceDraftList(draft.skills),
-        user_note: draft.user_note,
+        ...evidenceDraftPayload(draft),
         status
       });
       await refreshEvidenceLibrary();
@@ -1631,6 +1595,7 @@ function App() {
     } catch (nextError) {
       setError(toErrorMessage(nextError));
     } finally {
+      evidenceCardSaveLock.current = false;
       setBusy((current) => ({ ...current, evidenceCardId: null }));
     }
   }
@@ -2779,6 +2744,8 @@ function App() {
           <div className="evidence-card-grid">
             {evidenceCards.length ? evidenceCards.map((card) => {
               const draft = evidenceCardDrafts[card.id] ?? evidenceCardToDraft(card);
+              const confirmation = evidenceConfirmation(card, draft);
+              const saving = busy.evidenceCardId !== null;
               return (
                 <article className={`evidence-card status-${card.status}`} key={card.id}>
                   <header>
@@ -2788,47 +2755,47 @@ function App() {
                         {card.provenance_type === "document" ? "文件证据" : "用户自述"}
                       </span>
                       <span className={`chip ${card.status === "confirmed" ? "positive" : card.status === "rejected" ? "warning" : ""}`}>
-                        {card.status === "confirmed" ? "已确认" : card.status === "rejected" ? "已拒绝" : "待确认"}
+                        {card.status === "confirmed" ? confirmation.dirty ? "有修改，待重新确认" : "已确认" : card.status === "rejected" ? "已拒绝" : "待确认"}
                       </span>
                     </div>
                   </header>
                   {card.user_note ? <small>{card.user_note}</small> : null}
                   <label>
                     <span>卡片标题</span>
-                    <input value={draft.title} onChange={(event) => updateEvidenceCardDraft(card, "title", event.target.value)} />
+                    <input disabled={saving} value={draft.title} onChange={(event) => updateEvidenceCardDraft(card, "title", event.target.value)} />
                   </label>
                   <div className="evidence-card-meta">
                     <label>
                       <span>类别</span>
-                      <select value={draft.category} onChange={(event) => updateEvidenceCardDraft(card, "category", event.target.value)}>
+                      <select disabled={saving} value={draft.category} onChange={(event) => updateEvidenceCardDraft(card, "category", event.target.value)}>
                         {Object.entries(EVIDENCE_CATEGORY_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
                       </select>
                     </label>
                     <label>
                       <span>组织</span>
-                      <input value={draft.organization} onChange={(event) => updateEvidenceCardDraft(card, "organization", event.target.value)} />
+                      <input disabled={saving} value={draft.organization} onChange={(event) => updateEvidenceCardDraft(card, "organization", event.target.value)} />
                     </label>
                     <label>
                       <span>时间</span>
-                      <input value={draft.time_range} onChange={(event) => updateEvidenceCardDraft(card, "time_range", event.target.value)} />
+                      <input disabled={saving} value={draft.time_range} onChange={(event) => updateEvidenceCardDraft(card, "time_range", event.target.value)} />
                     </label>
                   </div>
                   <label>
                     <span>背景 / 场景</span>
-                    <textarea rows={3} value={draft.situation} onChange={(event) => updateEvidenceCardDraft(card, "situation", event.target.value)} />
+                    <textarea disabled={saving} rows={3} value={draft.situation} onChange={(event) => updateEvidenceCardDraft(card, "situation", event.target.value)} />
                   </label>
                   <label>
                     <span>行动（每行一条）</span>
-                    <textarea rows={3} value={draft.actions} onChange={(event) => updateEvidenceCardDraft(card, "actions", event.target.value)} />
+                    <textarea disabled={saving} rows={3} value={draft.actions} onChange={(event) => updateEvidenceCardDraft(card, "actions", event.target.value)} />
                   </label>
                   <div className="evidence-card-meta two-columns">
                     <label>
                       <span>结果</span>
-                      <textarea rows={2} value={draft.results} onChange={(event) => updateEvidenceCardDraft(card, "results", event.target.value)} />
+                      <textarea disabled={saving} rows={2} value={draft.results} onChange={(event) => updateEvidenceCardDraft(card, "results", event.target.value)} />
                     </label>
                     <label>
                       <span>技能</span>
-                      <textarea rows={2} value={draft.skills} onChange={(event) => updateEvidenceCardDraft(card, "skills", event.target.value)} />
+                      <textarea disabled={saving} rows={2} value={draft.skills} onChange={(event) => updateEvidenceCardDraft(card, "skills", event.target.value)} />
                     </label>
                   </div>
                   {card.provenance_type === "document" ? (
@@ -2838,10 +2805,10 @@ function App() {
                     </blockquote>
                   ) : <small className="evidence-warning">这张卡片来自用户手工补充，不会显示为文件证据。</small>}
                   <div className="evidence-actions">
-                    <button type="button" disabled={busy.evidenceCardId === card.id} onClick={() => void handleSaveEvidenceCard(card, "draft")}>保存草稿</button>
-                    <button className="primary" type="button" disabled={busy.evidenceCardId === card.id} onClick={() => void handleSaveEvidenceCard(card, "confirmed")}>确认事实</button>
-                    <button type="button" disabled={busy.evidenceCardId === card.id} onClick={() => void handleSaveEvidenceCard(card, "rejected")}>拒绝</button>
-                    <button className="danger-quiet" type="button" disabled={busy.evidenceCardId === card.id} onClick={() => void handleDeleteEvidenceCard(card)}>删除</button>
+                    <button type="button" disabled={saving} onClick={() => void handleSaveEvidenceCard(card, "draft")}>保存草稿</button>
+                    <button className="primary" type="button" disabled={saving || confirmation.disabled} onClick={() => void handleSaveEvidenceCard(card, "confirmed")}>{busy.evidenceCardId === card.id ? "保存中..." : confirmation.label}</button>
+                    <button type="button" disabled={saving} onClick={() => void handleSaveEvidenceCard(card, "rejected")}>拒绝</button>
+                    <button className="danger-quiet" type="button" disabled={saving} onClick={() => void handleDeleteEvidenceCard(card)}>删除</button>
                   </div>
                 </article>
               );
