@@ -4,6 +4,7 @@ import { ApplicationFiltersBar, ApplicationPagination, applyApplicationFilters, 
 import { WorkspaceNextStep, type NextStepAction } from "./WorkspaceNextStep";
 import { EvidenceUploadForm } from "./EvidenceUploadForm";
 import { prepareStudioJob, StudioPreparation } from "./StudioPreparation";
+import { runPlatformApplication } from "./lib/platformApply";
 import { evidenceCardToDraft, evidenceConfirmation, evidenceDraftPayload, splitEvidenceDraftList, type EvidenceCardDraft } from "./lib/evidenceCards";
 import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
 import { api, getTailorBlockedMessage } from "./lib/api";
@@ -379,6 +380,8 @@ function App() {
   const [manualDetailNotes, setManualDetailNotes] = useState<Record<number, string>>({});
   const [applyNotes, setApplyNotes] = useState<Record<number, string>>({});
   const [applyPreviews, setApplyPreviews] = useState<Record<number, PlatformApplyPreview>>({});
+  const [applyFeedback, setApplyFeedback] = useState<Record<number, string>>({});
+  const platformApplyLock = useRef(false);
   const [statusDrafts, setStatusDrafts] = useState<Record<number, ApplicationStatus>>({});
   const [statusNotes, setStatusNotes] = useState<Record<number, string>>({});
 
@@ -1426,43 +1429,26 @@ function App() {
   }
 
   async function handleApplyPreview(job: JobPosting) {
+    if (platformApplyLock.current) return;
+    platformApplyLock.current = true;
     setBusy((current) => ({ ...current, applyJobId: job.id }));
     setError(null);
+    setApplyFeedback(current => ({ ...current, [job.id]: "正在自动检查平台入口…" }));
     try {
-      const preview = await api.previewPlatformApply(job.id);
-      setSelectedJobId(job.id);
-      setApplyPreviews((current) => ({ ...current, [job.id]: preview }));
-      if (!preview.ready) {
-        setError(`平台投递预检未通过：${preview.evidence || preview.status}`);
-      }
-    } catch (nextError) {
-      setError(toErrorMessage(nextError));
-    } finally {
-      setBusy((current) => ({ ...current, applyJobId: null }));
-    }
-  }
-
-  async function handleConfirmPlatformApply(job: JobPosting) {
-    const preview = applyPreviews[job.id];
-    if (!preview?.ready) {
-      setError("请先检查平台投递入口，预检通过后再确认真实投递。");
-      return;
-    }
-    setBusy((current) => ({ ...current, applyJobId: job.id }));
-    setError(null);
-    try {
-      const note =
-        applyNotes[job.id]?.trim() ||
-        `平台预检通过后真实投递：${job.company} / ${job.title} / ${preview.button_text || preview.status}`;
-      await api.applyToPlatform(job.id, note);
-      setApplyPreviews((current) => {
-        const { [job.id]: _removed, ...rest } = current;
-        return rest;
+      const result = await runPlatformApplication(job, {
+        preview: api.previewPlatformApply,
+        confirm: message => window.confirm(message),
+        apply: id => api.applyToPlatform(id, applyNotes[id]?.trim() || `用户明确确认：${job.company} / ${job.title}`),
       });
-      await refreshOutcomeData();
+      setSelectedJobId(job.id);
+      setApplyPreviews(current => ({ ...current, [job.id]: result.preview }));
+      setApplyFeedback(current => ({ ...current, [job.id]: result.message }));
+      if (result.submitted) await refreshOutcomeData();
     } catch (nextError) {
+      setApplyFeedback(current => ({ ...current, [job.id]: "操作未完成，请按错误提示处理后重试；没有新增已确认投递。" }));
       setError(toErrorMessage(nextError));
     } finally {
+      platformApplyLock.current = false;
       setBusy((current) => ({ ...current, applyJobId: null }));
     }
   }
@@ -2922,7 +2908,6 @@ function App() {
               </div>
               {rankedJobs.map((job) => {
                 const application = applicationsByJob.get(job.id);
-                const applyPreview = applyPreviews[job.id];
                 return (
                   <article
                     className={`table-row ${selectedJob?.id === job.id ? "is-selected" : ""}`}
@@ -2967,27 +2952,19 @@ function App() {
                       </button>
                       <button
                         type="button"
-                        disabled={Boolean(application) || busy.applyJobId === job.id || deletingRecords !== null}
+                        disabled={Boolean(application) || busy.applyJobId !== null || deletingRecords !== null}
                         onClick={(event) => {
                           event.stopPropagation();
-                          void (applyPreview?.ready ? handleConfirmPlatformApply(job) : handleApplyPreview(job));
+                          void handleApplyPreview(job);
                         }}
                       >
                         {application
                           ? summarizePlatformConfirmation(application.platform_proof, application.latest_note).confirmed ? "平台已确认" : "已有记录待核对"
                           : busy.applyJobId === job.id
                             ? "平台检查中"
-                            : applyPreview?.ready
-                              ? "确认真实投递"
-                              : "检查投递入口"}
+                            : "去沟通／投递"}
                       </button>
-                      {applyPreview ? (
-                        <small className={applyPreview.ready ? "chip positive" : "chip warning"}>
-                          {applyPreview.ready
-                            ? `已找到平台入口：${applyPreview.button_text || applyPreview.status}`
-                            : `预检未通过：${applyPreview.status}`}
-                        </small>
-                      ) : null}
+                      {applyFeedback[job.id] ? <small className="chip warning" role="status">{applyFeedback[job.id]}</small> : null}
                     </div>
                   </article>
                 );
@@ -3239,26 +3216,20 @@ function App() {
                         <small>{selectedApplyPreview.source_url || selectedJob.url}</small>
                       </>
                     ) : (
-                      <p>先点击“检查投递入口”，系统会打开真实岗位页，只读确认是否存在投递/沟通按钮。</p>
+                      <p>点击下方入口自动进行只读检查；涉及平台发送前会再明确询问一次。</p>
                     )}
                   </div>
                   <button
                     className="primary"
                     type="button"
-                    disabled={Boolean(applicationsByJob.get(selectedJob.id)) || busy.applyJobId === selectedJob.id}
-                    onClick={() =>
-                      void (selectedApplyPreview?.ready
-                        ? handleConfirmPlatformApply(selectedJob)
-                        : handleApplyPreview(selectedJob))
-                    }
+                    disabled={Boolean(applicationsByJob.get(selectedJob.id)) || busy.applyJobId !== null}
+                    onClick={() => void handleApplyPreview(selectedJob)}
                   >
                     {applicationsByJob.get(selectedJob.id)
                       ? "平台已确认投递"
                       : busy.applyJobId === selectedJob.id
                         ? "平台检查中..."
-                        : selectedApplyPreview?.ready
-                          ? "确认真实平台投递"
-                          : "检查投递入口"}
+                        : "去沟通／投递"}
                   </button>
                 </div>
               ) : selectedTailorBlockedMessage ? (
