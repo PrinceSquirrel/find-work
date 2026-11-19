@@ -418,6 +418,23 @@ Object.defineProperty(document.body, 'innerText', {get:()=>body});
     assert json.loads(result.stdout)["confirmed"] is expected
 
 
+def test_platform_actions_skip_wrapper_and_wait_for_delayed_proof():
+    script = browser_job_extractor_service.BrowserJobExtractorService()._application_click_script("boss", "https://example.com/job")
+    harness = """
+let body = '岗位详情'; let clicks = 0; let waits = 0;
+globalThis.location = {href:'https://example.com/job'};
+globalThis.setTimeout = callback => { if (clicks && ++waits === 3) body='已发送'; callback(); };
+const leaf = {innerText:'立即沟通',disabled:false,className:'btn btn-startchat',offsetParent:{},getAttribute:()=>null,scrollIntoView:()=>{},click:()=>{clicks++;}};
+const wrapper = {...leaf,innerText:'感兴趣 立即沟通',contains:n=>n===leaf,click:()=>{throw Error('Wrapper clicked');}};
+globalThis.document={body:{},querySelectorAll:()=>[wrapper,leaf],querySelector:()=>null};
+Object.defineProperty(document.body,'innerText',{get:()=>body});
+"""
+    result = subprocess.run(["node", "--input-type=module", "-e", harness + "const result=await " + script + ";console.log(JSON.stringify({result,clicks}));"], capture_output=True, text=True, encoding="utf-8", check=True)
+    payload = json.loads(result.stdout)
+    assert payload["result"]["confirmed"] is True
+    assert payload["clicks"] == 1
+
+
 @pytest.mark.parametrize("missing", ["confirmed_at", "source_url", "evidence", "action"])
 def test_storage_does_not_save_incomplete_platform_proof(tmp_path, missing):
     client = TestClient(create_app(db_path=tmp_path / "proof.sqlite3"))
@@ -913,7 +930,7 @@ def test_browser_cdp_search_mode_saves_extracted_jobs_without_demo_fallback(tmp_
     class FakeBrowserJobExtractorService:
         def extract(self, platforms, limit):
             assert platforms == ["boss"]
-            assert limit == 8
+            assert limit == 50
             return type(
                 "ExtractionResponse",
                 (),
@@ -1059,7 +1076,7 @@ def test_browser_cdp_search_mode_controls_page_with_keywords_before_extracting(t
             "platforms": ["boss"],
             "keywords": ["Python 实习", "数据分析"],
             "city": "上海",
-            "limit": 8,
+            "limit": 50,
         }
     ]
     jobs = client.get(f"/api/jobs?search_run_id={response.json()['id']}").json()

@@ -30,7 +30,8 @@ def main():
         def job_scripts():
             service = BrowserJobExtractorService(cdp_url="http://127.0.0.1:9222")
             url = "http://127.0.0.1:8768/job_detail/synthetic.html"
-            return {"detail": service._detail_refresh_script("boss", url), "extract": service._extract_script("boss", 8)}
+            return {"detail": service._detail_refresh_script("boss", url), "extract": service._extract_script("boss", 8),
+                    "preview": service._application_preview_script("boss", url), "apply": service._application_click_script("boss", url)}
 
         try:
             uvicorn.run(app, host="127.0.0.1", port=8768, log_level="warning")

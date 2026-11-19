@@ -32,7 +32,7 @@ from app.services.platform_session_service import PlatformSessionService
 from app.storage import SQLiteStore
 
 
-BROWSER_CDP_SEARCH_RUN_LIMIT = 8
+BROWSER_CDP_SEARCH_RUN_LIMIT = 50
 
 
 class LowQualityJobDetailError(ValueError):

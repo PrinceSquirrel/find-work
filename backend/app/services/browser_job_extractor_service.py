@@ -1033,11 +1033,13 @@ class BrowserJobExtractorService:
     return respond(true, "already_applied", "already_confirmed", "platform page already shows applied/contacted state");
   }}
   const nodes = Array.from(document.querySelectorAll("button,a,[role='button'],.btn,[class*='btn'],[class*='button']"));
-  for (const node of nodes) {{
+  // Skip wrapper divs: the actual platform click handler belongs to the leaf action.
+  const actions = nodes.filter(node => !nodes.some(child => child !== node && node.contains?.(child) && applyPattern.test(labelFor(child))));
+  for (const node of actions) {{
     const label = labelFor(node);
     const disabled = node.disabled || node.getAttribute("aria-disabled") === "true" || /disabled/.test(String(node.className || ""));
     const visible = node.offsetParent !== null || node.getClientRects().length > 0;
-    if (!label || disabled || !visible || label.length > 120 || !applyPattern.test(label)) continue;
+    if (!label || disabled || !visible || label.length > 48 || !applyPattern.test(label)) continue;
     return respond(true, "ready", "preview", `found platform button: ${{label}}`, label);
   }}
   const chatInput = document.querySelector("textarea,[contenteditable='true'],.chat-input,[class*='chat-input'],[class*='message-input']");
@@ -1080,26 +1082,29 @@ class BrowserJobExtractorService:
     return respond(true, "already_applied", "already_confirmed", "platform page already shows applied/contacted state");
   }}
   const nodes = Array.from(document.querySelectorAll("button,a,[role='button'],.btn,[class*='btn'],[class*='button']"));
-  for (const node of nodes) {{
+  const actions = nodes.filter(node => !nodes.some(child => child !== node && node.contains?.(child) && applyPattern.test(text(child))));
+  for (const node of actions) {{
     const label = text(node);
     const disabled = node.disabled || node.getAttribute("aria-disabled") === "true" || /disabled/.test(node.className || "");
     const visible = node.offsetParent !== null || node.getClientRects().length > 0;
-    if (!label || disabled || !visible || !applyPattern.test(label)) continue;
+    if (!label || disabled || !visible || label.length > 48 || !applyPattern.test(label)) continue;
     node.scrollIntoView?.({{ block: "center", inline: "center" }});
     node.click();
-    await sleep(1200);
-    pageText = bodyText();
-    if (blockerPattern.test(pageText)) {{
-      return respond(false, "clicked_but_blocked", "clicked_apply", `clicked "${{label}}", but platform requires verification`);
-    }}
-    if (alreadyPattern.test(pageText)) {{
-      return respond(true, "applied", "clicked_apply", `clicked platform button: ${{label}}`);
+    for (let attempt = 0; attempt < 6; attempt += 1) {{
+      await sleep(400);
+      pageText = bodyText();
+      if (blockerPattern.test(pageText)) {{
+        return respond(false, "clicked_but_blocked", "clicked_apply", "平台要求登录或安全验证，尚未确认发送，请在平台处理后重试。");
+      }}
+      if (alreadyPattern.test(pageText)) {{
+        return respond(true, "applied", "clicked_apply", `clicked platform button: ${{label}}`);
+      }}
     }}
     const chatInput = document.querySelector("textarea,[contenteditable='true'],.chat-input,[class*='chat-input'],[class*='message-input']");
     if (chatInput) {{
       return respond(false, "chat_opened_unconfirmed", "clicked_apply", `已打开聊天窗口，但尚未确认招呼已发送或简历已投递：${{label}}`);
     }}
-    return respond(false, "clicked_unconfirmed", "clicked_apply", `clicked "${{label}}", but platform did not show applied/contacted state`);
+    return respond(false, "clicked_unconfirmed", "clicked_apply", "已打开平台沟通入口，但尚未确认招呼已发送或简历已投递。请在平台完成发送后同步投递状态；不会重复点击发送或伪造成功记录。");
   }}
   return respond(false, "button_not_found", "none", "no platform apply or chat button was found");
 }})()

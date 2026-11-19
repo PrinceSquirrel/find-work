@@ -3536,3 +3536,5 @@ Updated: 2026-07-03 Asia/Shanghai
 - S3 complete：新增 3 项覆盖自动本地／模型一次调用与引用／无相关事实；初测新测试文件未清理进程模型环境而尝试连接，已按项目惯例隔离环境，重测后端 186、前端 92、lint/build 通过。没有修改密钥或调用真实模型。提交 feat: select relevant evidence automatically during trusted generation。
 - S3 提交 366d8574146ffd8af417aa64db51ad15c2d05d0a 已同步远端一致。S4 五文件：App.tsx、StudioPreparation.tsx／测试、check-studio-flow.js、本文件。默认自动模式无逐项勾选，基础简历独立沿用；手动调整保留。生成前补全 JD，失败不调模型，切岗不调用旧岗位模型；准备区直接展示完整正文／摘要状态。启动传勾选项，提取预览上限 50；创建搜索任务后端原 8 条限制下一阶段一并修正。
 - S4 complete：进入生成中心自动读取缺失 JD；新增 4 项前端测试。合成浏览器通过默认无勾选／空选择自动调用、自动补 JD、失败重试、双击、切岗、审核定稿与刷新共 12 类检查；初次测试路由拼成 detail-refresh，改为真实 refresh-detail 后通过。后端 186、前端 96、lint/build 全通过。提交 feat: show full JD and default to automatic evidence preparation。
+- S4 提交 0734d7bcffaed707b647e95b41a62e8e8c550112 已同步远端一致。S5 五文件：岗位提取／编排服务、test_api_flow.py、临时脚本服务、本文件。只读 DOM 确认 BOSS 的 btn-startchat-wrap 包装层在真正 A 按钮之前，被误点击；现在预检与发送都选择最内层有效按钮，一次点击后有界等待异步证明。只打开聊天／入口仍为未确认，给出中文下一步，不创建虚假投递。搜索任务上限由 8 改为 50。
+- S5 complete：新增真实 JS 执行测试（包装层不点／延迟证明／只点一次），并更新两处原 8 条预期；初测用例早于实现运行及旧上限预期失败，补齐后全量重测 187 后端／96 前端、lint/build 通过。合成真实浏览器验证预检选中 A 元素“立即沟通”，延迟已发送只点击一次并确认；未接触真人平台发送。提交 fix: target real platform actions and expand bounded job collection。
