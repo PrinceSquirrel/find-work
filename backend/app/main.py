@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.application_tracker import InvalidStatusTransition
 from app.schemas import (
+    CdpBrowserLaunchRequest,
     AgentModelRoutesResponse,
     ApplicationSyncRequest,
     ApplyRecordRequest,
@@ -205,9 +206,9 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
         return PlatformSessionService().inspect()
 
     @app.post("/api/browser/launch-cdp")
-    def launch_cdp_browser():
+    def launch_cdp_browser(payload: CdpBrowserLaunchRequest | None = None):
         try:
-            return CdpBrowserLauncher().launch()
+            return CdpBrowserLauncher().launch(platforms=payload.platforms) if payload else CdpBrowserLauncher().launch()
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except OSError as exc:

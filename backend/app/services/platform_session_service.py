@@ -4,8 +4,8 @@ import json
 import os
 import subprocess
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 from pathlib import Path
 
 from app.schemas import PlatformSession, PlatformSessionsResponse
@@ -133,17 +133,34 @@ class CdpBrowserLauncher:
         "https://www.shixiseng.com/interns",
     ]
 
-    def launch(self, port: int = 9222) -> dict[str, object]:
+    def launch(self, port: int = 9222, platforms: list[str] | None = None) -> dict[str, object]:
+        if platforms is not None and (not platforms or any(platform not in PLATFORM_HOSTS for platform in platforms)):
+            raise ValueError("请选择 BOSS 或实习僧后启动")
+        selected = list(dict.fromkeys(platforms or PLATFORM_HOSTS))
+        urls = dict(zip(PLATFORM_HOSTS, self.default_urls))
+        selected_urls = [urls[platform] for platform in selected]
         existing_cdp_host = self._detect_existing_cdp_host(port)
         if existing_cdp_host:
             os.environ["BROWSER_CDP_URL"] = existing_cdp_host
+            opened_urls = []
+            if platforms is not None:
+                base = normalize_cdp_url(existing_cdp_host)
+                with urlopen(f"{base}/json", timeout=2) as response:
+                    tabs = json.loads(response.read().decode("utf-8"))
+                for platform in selected:
+                    present = any(any((urlparse(tab.get("url", "")).hostname or "").endswith(host) for host in PLATFORM_HOSTS[platform]) for tab in tabs if tab.get("type", "page") == "page")
+                    if not present:
+                        request = Request(f"{base}/json/new?{quote(urls[platform], safe='')}", method="PUT")
+                        with urlopen(request, timeout=3):
+                            pass
+                        opened_urls.append(urls[platform])
             return {
                 "status": "reused",
                 "browser": "existing",
                 "cdp_url": existing_cdp_host,
                 "profile_dir": None,
-                "opened_urls": [],
-                "message": "已复用现有 CDP 浏览器。请确认 BOSS/实习僧标签页已登录，然后刷新会话或直接搜索。",
+                "opened_urls": opened_urls,
+                "message": "已复用浏览器，仅检查并打开所选平台；请在对应页面确认登录。",
             }
 
         browser_name, executable = self._find_browser()
@@ -156,7 +173,7 @@ class CdpBrowserLauncher:
             f"--user-data-dir={profile_dir}",
             "--no-first-run",
             "--new-window",
-            *self.default_urls,
+            *selected_urls,
         ]
         subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         os.environ["BROWSER_CDP_URL"] = cdp_host
@@ -165,8 +182,8 @@ class CdpBrowserLauncher:
             "browser": browser_name,
             "cdp_url": cdp_host,
             "profile_dir": str(profile_dir),
-            "opened_urls": self.default_urls,
-            "message": "已启动独立 CDP 浏览器。请在新窗口中登录 BOSS/实习僧，然后回到工作台刷新会话。",
+            "opened_urls": selected_urls,
+            "message": "已启动独立 CDP 浏览器，仅打开所选平台；请完成登录后刷新会话。",
         }
 
     def _detect_existing_cdp_host(self, port: int) -> str | None:

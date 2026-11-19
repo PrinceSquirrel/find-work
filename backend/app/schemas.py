@@ -325,6 +325,10 @@ class BrowserJobExtractRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=50)
 
 
+class CdpBrowserLaunchRequest(BaseModel):
+    platforms: list[Literal["boss", "shixiseng"]] = Field(min_length=1, max_length=2)
+
+
 class BrowserJobSearchRequest(BrowserJobExtractRequest):
     keywords: list[str] = Field(default_factory=list)
     city: str = ""

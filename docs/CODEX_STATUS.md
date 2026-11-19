@@ -3530,3 +3530,5 @@ Updated: 2026-07-03 Asia/Shanghai
 - 分阶段每次最多五文件并全量验证提交同步：①渲染 JD 与有界虚拟滚动；②按平台启动接口／页面；③自动经历选择与展示 JD；④简化投递及安全结果状态；⑤联合回归与使用说明。
 - 第一阶段五文件：browser_job_extractor_service.py、test_rendered_job_workflow.py、临时服务、浏览器 DOM 回归、本文件。详情先进入正确岗位并等待渲染，拒绝非平台 HTTPS URL；虚拟列表按岗位键保存快照，最多 20 轮／三轮无新增／目标上限停止。临时服务退出恢复 cwd 便于 Windows 清理。后续尚未实现，不标完成。
 - S1 complete：后端 179、前端 92、lint/build、diff 和脚本语法通过。真实登录页只读验证得到 327 字 JD；合成浏览器验证 SPA 动态正文、验证码停止、复用同一 DOM 下收集 7 个不同岗位且保留首条。提交 fix: read rendered job descriptions and retain virtual-list snapshots 后立即同步；其余阶段继续。
+- S1 提交 2f67298b7d61aeb42d5537c2c0188c194a012b35 已同步且远端一致。S2 五文件：平台启动服务／请求模型／路由、test_selected_platform_launch.py、本文件。显式传平台只打开勾选项；复用浏览器只新建缺失的所选标签页，不关闭其他用户标签页；空／未知平台拒绝，无参数旧接口兼容。前端下一阶段接线。
+- S2 complete：新增 4 项覆盖单选两平台、新启动、复用不重复／仅补缺失页及请求校验；后端 183、前端 92、lint/build 全通过。提交 fix: launch only requested recruitment platforms，随后立即推送核对。
