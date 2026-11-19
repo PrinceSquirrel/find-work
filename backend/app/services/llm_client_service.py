@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 from app.schemas import EvidenceCard, EvidenceSource, JobMatch, JobPosting, ModelConfig, ResumeDraft
 from app.services.llm_prompt_service import LLMPromptService
+from app.services.task_skills import model_skill
 
 
 class LLMClientUnavailable(RuntimeError):
@@ -167,6 +168,19 @@ class OpenAICompatibleClient:
             prompt=self.prompt_service.evidence_tailor_user_prompt(job, cards),
             temperature=0.1,
         )
+
+    def generate_job_greeting(self, config: ModelConfig, job: JobPosting, cards: list[EvidenceCard]) -> LLMCompletionResult:
+        # No identity fields, private source text, or tool access are needed for this task.
+        data = {
+            "title": job.title, "company": job.company, "jd": job.description[:5000],
+            "facts": [
+                {"title": card.title[:120], "actions": [item[:180] for item in card.actions[:3]], "skills": card.skills[:8]}
+                for card in cards[:6] if card.status == "confirmed"
+                and (card.provenance_type != "document" or card.quote_verified)
+            ],
+        }
+        return self._generate_json(config, system_message=model_skill("application.greeting"),
+                                   prompt=json.dumps(data, ensure_ascii=False), temperature=0.2)
 
     def score_job_matches(
         self,
