@@ -173,7 +173,8 @@ class EvidenceService:
         self._ensure_job_detail_ready(job.detail_status, job.detail_reason)
         cards = self.store.list_evidence_cards(status="confirmed")
         job_text = f"{job.title} {job.description}".lower()
-        requirements = [term for term in IMPORTANT_TERMS if term.lower() in job_text]
+        terms = [*IMPORTANT_TERMS, "需求分析", "用户调研", "产品设计", "产品经理", "原型", "PRD", "用户反馈", "数据分析", "竞品", "交互", "项目管理", "测试", "运营", "沟通", "协作"]
+        requirements = [term for term in dict.fromkeys(terms) if term.lower() in job_text]
         recommendations: list[EvidenceRecommendation] = []
         for card in cards:
             card_text = self._card_text(card).lower()
@@ -198,9 +199,19 @@ class EvidenceService:
         resume = self.store.get_resume(resume_id)
         job = self.store.get_job(job_id)
         self._ensure_job_detail_ready(job.detail_status, job.detail_reason)
-        cards = self._confirmed_cards(evidence_card_ids)
         config = self.store.get_agent_model_route("ApplicationWriterAgent")
         route = self.model_router.route_for_agent("ApplicationWriterAgent", config)
+        automatic = not evidence_card_ids
+        if automatic:
+            recommendations = self.recommend_cards(job_id)
+            # The writer selects relevant facts in its existing model call; no second paid selection call.
+            eligible = [item for item in recommendations if item.card.category != "education"]
+            if route.mode != "external":
+                eligible = [item for item in eligible if item.score >= 40]
+            evidence_card_ids = [item.card.id for item in eligible[:24 if route.mode == "external" else 6] if item.card.id is not None]
+            if not evidence_card_ids:
+                raise EvidenceConflictError("没有与 JD 相关的已确认经历，请补充真实经历，或在手动调整中选择。")
+        cards = self._confirmed_cards(evidence_card_ids)
         if route.mode == "external":
             try:
                 result = self.llm_client.generate_evidence_tailor(config, job, cards)
@@ -240,6 +251,8 @@ class EvidenceService:
             "trusted_evidence_finalized": False,
             "traceability_coverage": 1.0,
             "generation_mode": generation_mode,
+            "evidence_selection_mode": "automatic_model" if automatic and route.mode == "external" else "automatic_rules" if automatic else "manual",
+            "used_evidence_card_ids": sorted({value for item in claim_specs for value in item["evidence_card_ids"]}),
             "summary": "内容均来自已确认经历卡片，仍需用户逐条接受后定稿",
         }
         bundle = self.store.save_tailor_bundle(tailored, greeting, review)
