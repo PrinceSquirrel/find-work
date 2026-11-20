@@ -3588,3 +3588,5 @@ Updated: 2026-07-03 Asia/Shanghai
 - S5 验证：先前提示契约的两项检查失败后，恢复显式事实及评分边界；相关 13 项、后端全量 218、前端 105、lint/build 通过。独立浏览器中拦截全网、渲染合成 BOSS 岗位和聊天：从岗位页打开会话、原文多行填充及延迟回执、重复防重、错公司不点击、来信不作回执全通过。提交 feat: use confirmed candidate intros and researched task instructions。
 - S5 `298812ede53101904f16164a8f02ad38176c4d8c` 已推送并核对一致。S6 五文件：弹窗、岗位雷达标签、API、浏览器回归、本记录。「我的招呼开场」确认后保存在本机浏览器；未确认变化不能运行，确认后旧草稿作废，重新逐岗生成。改称批量发送，明确不投附件。
 - S6 验证：独立浏览器通过填写→确认保存→逐岗生成→复用身份、编辑撤销授权、原文发送合同及单请求。全量 218 后端／105 前端、lint/build 和 diff 检查通过。提交 feat: save a reviewed introduction for job greeting drafts。待完成研究记录、全站复测和本地后端重载。
+- S6 `6a31eccc30b2d74520a8589e9c78eb9438e71972` 已推送并核对一致。S7 五文件：任务提示构建与测试、README、调研记录、本文件。岗位模型明确区分 JD 不完整与资格不符合，定制材料不推断身份；准备重跑全量和全站浏览器检查，然后只在空闲时重载项目后端、不关闭招聘浏览器。
+- S7 验证：23 项相关测试、后端 218／前端 105、lint/build、聚焦／六页三视口均通过。已备份 `output/before-greeting-update-b368460f-f5cc-49fe-87da-8ba45f289246.sqlite3`，重载成功。首次 PowerShell 技能数组判定错误，独立 Python GET 核实新接口和任务定义、8000/5173 健康、原招聘标签保留；简历、资料、岗位、投递、模型配置未变化，发送尝试表为空。复查发现部分旧岗位公司误填薪资；需要 S8 使用真实详情页身份绑定，未最终交付。提交 docs: record evidence and verify job workflow guidance。

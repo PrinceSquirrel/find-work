@@ -51,6 +51,7 @@ def test_application_writer_prompt_locks_identity_and_rewrites_resume_body():
     assert "锁定身份信息和教育经历" in prompt
     assert "技能、项目、实习、经历描述、自我评价、摘要等简历正文" in prompt
     assert "只输出可替换正文" in prompt
+    assert "届别、院校、专业、学历或到岗安排只在原简历明确提供时使用" in prompt
     assert "Agent 实习生" in prompt
     assert "需要 Python、SQL、Agent 工具和数据分析经验" in prompt
 
@@ -70,6 +71,8 @@ def test_job_match_prompt_is_scoring_only_and_includes_rule_context():
     assert "matches" in prompt
     assert "job_index" in prompt
     assert "rule_score" in prompt
+    assert "detail_status" in prompt
+    assert "不要把未知当作不符合" in prompt
     assert "recommendation" in prompt
 
 
