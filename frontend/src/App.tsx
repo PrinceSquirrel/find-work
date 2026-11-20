@@ -6,6 +6,7 @@ import { EvidenceUploadForm } from "./EvidenceUploadForm";
 import { prepareStudioJob, StudioPreparation } from "./StudioPreparation";
 import { runPlatformApplication } from "./lib/platformApply";
 import { JobFocus, JobSummary } from "./JobFocus";
+import { JobPreferenceScore, preferenceKey, summarizeJobPreference, useJobPreferences } from "./JobPreferenceScore";
 import { JobBatchDialog, JOB_BATCH_LIMIT } from "./JobBatchDialog";
 import { evidenceCardToDraft, evidenceConfirmation, evidenceDraftPayload, splitEvidenceDraftList, type EvidenceCardDraft } from "./lib/evidenceCards";
 import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
@@ -379,6 +380,8 @@ function App() {
     keyword: "",
     minScore: 0
   });
+  const jobPreferences = useJobPreferences();
+  const [byPreference, setByPreference] = useState(false);
   const [manualDetailDrafts, setManualDetailDrafts] = useState<Record<number, string>>({});
   const [manualDetailNotes, setManualDetailNotes] = useState<Record<number, string>>({});
   const [applyNotes, setApplyNotes] = useState<Record<number, string>>({});
@@ -397,6 +400,14 @@ function App() {
   }, []);
 
   const rankedJobs = useMemo(() => rankJobs(jobs, filters), [filters, jobs]);
+  const personalScores = useMemo(() => {
+    const { weights, jobs: ratings } = jobPreferences.preferences;
+    return new Map(rankedJobs.map(job => [job.id, summarizeJobPreference(weights, ratings[preferenceKey(job)])]));
+  }, [rankedJobs, jobPreferences.preferences]);
+  const displayedJobs = useMemo(() => byPreference ? [...rankedJobs].sort((left, right) =>
+    (personalScores.get(right.id)?.score ?? -1) - (personalScores.get(left.id)?.score ?? -1) ||
+    (personalScores.get(right.id)?.rated ?? 0) - (personalScores.get(left.id)?.rated ?? 0)) : rankedJobs,
+  [byPreference, personalScores, rankedJobs]);
   const confirmedEvidenceCards = useMemo(
     () => evidenceCards.filter((card) => card.status === "confirmed"),
     [evidenceCards]
@@ -2940,6 +2951,13 @@ function App() {
                 : "创建搜索任务后会显示模型路由、规则兜底和 token 成本。"}
             </span>
           </div>
+          <div className="job-preference-toolbar">
+            <label>岗位排序 <select aria-label="岗位排序" value={byPreference ? "personal" : "reference"}
+              onChange={event => setByPreference(event.target.value === "personal")}>
+              <option value="reference">按系统匹配分</option><option value="personal">按我的评分</option>
+            </select></label>
+            <small>点「查看要求」为工资、地区等六项评分</small>
+          </div>
 
           {busy.boot || busy.search ? (
             <LoadingRows count={5} />
@@ -2951,8 +2969,9 @@ function App() {
                 <span>证据</span>
                 <span>动作</span>
               </div>
-              {rankedJobs.map((job) => {
+              {displayedJobs.map((job) => {
                 const application = applicationsByJob.get(job.id);
+                const personal = personalScores.get(job.id);
                 return (
                   <article
                     className={`table-row ${selectedJob?.id === job.id ? "is-selected" : ""}`}
@@ -2979,6 +2998,7 @@ function App() {
                         <i style={{ width: `${clampPercent(job.match.score)}%` }} />
                       </div>
                       <span>{RECOMMENDATION_LABELS[job.match.recommendation] ?? job.match.recommendation}</span>
+                      {personal && personal.score !== null && <small className="chip positive">我的评分 {personal.score} · {personal.rated}/{personal.enabled} 项</small>}
                     </div>
                     <div className="reason-cloud">
                       {job.match.hit_reasons.slice(0, 4).map((reason) => (
@@ -3527,6 +3547,7 @@ function App() {
               </div>
               <button type="button" autoFocus onClick={() => setDetailJobId(null)}>关闭</button>
             </div>
+            <JobPreferenceScore job={detailJob} {...jobPreferences} />
             <section aria-label="岗位评分说明">
               <h3>匹配参考分 {detailJob.match.score} / 100</h3>
               <p>比较基础简历和岗位描述中的技能、经历关键词。启用的匹配模型可结合岗位职责调整规则分；模型不可用时用规则：基础 35 分、每个重点技能命中加 10 分、每个重复词项加 4 分，上限 100。没有重点技能命中时最高 45 分，缺口达到 4 项再扣 10 分。</p>

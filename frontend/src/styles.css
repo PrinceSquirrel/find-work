@@ -1437,6 +1437,21 @@ pre {
 .job-focus-dialog::backdrop { background: rgba(16, 40, 33, .62); }
 .job-focus-content { display: grid; gap: 14px; padding: clamp(14px, 4vw, 30px); overflow-wrap: anywhere; }
 .job-focus-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.75; }
+.job-preference-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 6px 0; }
+.job-preference-toolbar label { display: inline-flex; align-items: center; gap: 8px; }
+.job-preference-toolbar select { width: auto; }
+.job-preference-toolbar small { color: var(--muted); }
+.job-preference-card { border: 1px solid var(--line); border-top: 3px solid var(--green); border-radius: 12px; background: var(--green-soft); padding: 12px; }
+.job-preference-card summary { cursor: pointer; font-weight: 800; color: var(--green-deep); }
+.job-preference-card summary b { font-size: .88em; margin-inline-start: 12px; }
+.job-preference-card p { margin: 10px 0; }
+.job-preference-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+.job-preference-factor { display: grid; grid-template-columns: 1fr 1.2fr; gap: 6px; min-width: 0; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.job-preference-factor legend { padding-inline: 4px; font-weight: 700; }
+.job-preference-factor small { grid-column: 1 / -1; color: var(--muted); }
+.job-preference-factor label { min-width: 0; }
+@media (max-width: 720px) { .job-preference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 540px) { .job-preference-grid { grid-template-columns: 1fr; } }
 
 .status-pill {
   border: 1px solid var(--line-dark);
