@@ -6,6 +6,7 @@ import { EvidenceUploadForm } from "./EvidenceUploadForm";
 import { prepareStudioJob, StudioPreparation } from "./StudioPreparation";
 import { runPlatformApplication } from "./lib/platformApply";
 import { JobFocus, JobSummary } from "./JobFocus";
+import { JobBatchDialog, JOB_BATCH_LIMIT } from "./JobBatchDialog";
 import { evidenceCardToDraft, evidenceConfirmation, evidenceDraftPayload, splitEvidenceDraftList, type EvidenceCardDraft } from "./lib/evidenceCards";
 import { BulkRecordActions, RecordCheckbox, removeRecordKeys, toggleRecord } from "./BulkRecordActions";
 import { api, getTailorBlockedMessage } from "./lib/api";
@@ -345,6 +346,7 @@ function App() {
   const [deletionMessages, setDeletionMessages] = useState({ jobs: "", applications: "" });
   const recordDeletionLock = useRef(false);
   const [detailJobId, setDetailJobId] = useState<number | null>(null);
+  const [batchJobs, setBatchJobs] = useState<JobPosting[] | null>(null);
   const [lastRun, setLastRun] = useState<SearchRun | null>(null);
   const [searchMode, setSearchMode] = useState<SearchMode>("browser_cdp");
   const [platformSessions, setPlatformSessions] = useState<PlatformSession[]>([]);
@@ -471,9 +473,12 @@ function App() {
     [detailJobId, jobs]
   );
   const detailQuality = useMemo(() => (detailJob ? getJobDetailQuality(detailJob) : null), [detailJob]);
+  const batchUnavailable = busy.boot || busy.search || busy.extract || busy.launchCdp || busy.refreshDetailJobId !== null ||
+    busy.applyJobId !== null || busy.trustedTailorJobId !== null || deletingRecords !== null;
   const applicationsByJob = useMemo(() => {
     return new Map(applications.map((application) => [application.job_id, application]));
   }, [applications]);
+  const selectedJobBatch = rankedJobs.filter(job => selectedJobIds.includes(job.id) && !applicationsByJob.has(job.id));
   const usageCards = useMemo(() => summarizeUsage(usage), [usage]);
   const totalApplications = analytics?.totals.applications ?? applications.length;
   const activeModuleMeta = useMemo(() => getWorkspaceModule(activeModule), [activeModule]);
@@ -2858,7 +2863,7 @@ function App() {
           <div className="trusted-job-banner">
             <span>当前岗位</span>
             <b>{selectedJob ? `${selectedJob.company} · ${selectedJob.title}` : "尚未选择岗位"}</b>
-            <small>先在岗位雷达选择目标，再基于已确认经历生成。生成后仍需核对事实。</small>
+            <small>这里为单个岗位准备定制简历和招呼语。生成是草稿，核对后才定稿导出；不会自动投递。只需要招呼语时可跳过简历生成。</small>
             <div className="evidence-actions">
               <button type="button" onClick={() => activateWorkspaceModule("jobs")}>去岗位雷达选岗位</button>
               <button type="button" onClick={() => evidenceDialog.current?.showModal()}>检查资料与确认事实</button>
@@ -2868,6 +2873,7 @@ function App() {
             <button className="primary" type="button" disabled={!selectedJob || !resume || !confirmedEvidenceCards.length || busy.trustedTailorJobId !== null || busy.refreshDetailJobId !== null} onClick={() => void handleGenerateTrustedTailor()}>
               {busy.trustedTailorJobId !== null ? "推荐与生成中..." : "生成求职材料"}
             </button>
+            <button type="button" disabled={!selectedJob || batchUnavailable} onClick={() => { if (selectedJob) setBatchJobs([selectedJob]); }}>只写招呼语</button>
           </div>
 
           <StudioPreparation job={selectedJob} resume={resume} cards={evidenceCards} selected={selectedEvidenceCardIds} manual={manualEvidenceSelection}
@@ -2884,6 +2890,11 @@ function App() {
             onDelete={ids => handleBulkDelete("jobs", ids)} protectedCount={rankedJobs.filter(job => applicationsByJob.has(job.id)).length}
             busy={deletingRecords !== null || busy.boot || busy.search || busy.extract || busy.applyJobId !== null || busy.trustedTailorJobId !== null}
             message={deletionMessages.jobs} />
+          {selectedJobBatch.length > 0 && <div className="bulk-record-actions">
+            <button type="button" className="primary" disabled={batchUnavailable || selectedJobBatch.length > JOB_BATCH_LIMIT}
+              onClick={() => setBatchJobs(selectedJobBatch)}>准备招呼语／批量投递（{selectedJobBatch.length}）</button>
+            <small>只处理当前勾选的岗位，每批最多 {JOB_BATCH_LIMIT} 个。</small>
+          </div>}
           <div className="toolbar">
             <label>
               平台
@@ -3505,6 +3516,7 @@ function App() {
           <p className="tracking-insight-note">时段统计用于回顾，不代表下一次投递的回复概率。</p>
         </Panel>
       </section>
+      {batchJobs ? <JobBatchDialog jobs={batchJobs} onClose={() => setBatchJobs(null)} onRefresh={refreshOutcomeData} /> : null}
       {detailJob ? (
         <JobFocus onClose={() => setDetailJobId(null)}>
             <div className="modal-heading">

@@ -41,6 +41,21 @@ import type { BackendAgentEventsSnapshot } from "./dashboard";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
+export interface JobGreetingDraft {
+  job_id: number;
+  status: "ready" | "needs_jd" | "failed";
+  text?: string;
+  message?: string;
+  mode?: "model" | "local";
+  model?: string;
+}
+
+export interface BatchPlatformResult {
+  job_id: number;
+  status: "confirmed" | "skipped" | "blocked" | "unknown" | "not_attempted";
+  message: string;
+}
+
 class ApiError extends Error {
   status: number;
 
@@ -311,6 +326,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ note })
     });
+  },
+
+  prepareJobGreetings(jobIds: number[]): Promise<{items: JobGreetingDraft[]}> {
+    return request("/api/job-batches/greetings", { method: "POST", body: JSON.stringify({ job_ids: jobIds }) });
+  },
+
+  applyPlatformBatch(jobIds: number[], confirmed: true): Promise<{items: BatchPlatformResult[]}> {
+    return request("/api/job-batches/platform-apply", { method: "POST", body: JSON.stringify({ job_ids: jobIds, confirmed }) });
   },
 
   previewPlatformApply(jobId: number): Promise<PlatformApplyPreview> {
