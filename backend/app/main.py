@@ -42,6 +42,8 @@ from app.services import JobApplicationService
 from app.services.application_sync_service import ApplicationSyncService
 from app.services.browser_job_extractor_service import BrowserJobExtractorService
 from app.services.evidence_service import EvidenceConflictError, EvidenceModelError, EvidenceService
+from app.services.job_batch_service import BatchJobsRequest, BatchPlatformRequest, JobBatchService
+from app.services.task_skills import TASK_SKILLS
 from app.services.job_application_service import LowQualityJobDetailError, PlatformApplicationNotConfirmedError
 from app.services.llm_client_service import LLMClientUnavailable, OpenAICompatibleClient
 from app.services.pdf_service import TailoredResumePdfService
@@ -110,6 +112,7 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     app = FastAPI(title="agent-business", version="0.1.0")
     app.state.service = service
     app.state.evidence_service = evidence_service
+    app.state.job_batch = JobBatchService(service, evidence_service)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -631,7 +634,22 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
 
     @app.get("/api/skills")
     def list_skills():
-        return SKILL_REGISTRY
+        registered = {item.id: item for item in SKILL_REGISTRY}
+        for skill_id, task in TASK_SKILLS.items():
+            registered.setdefault(skill_id, SkillDefinition(id=skill_id, name=task.title, description=task.instructions))
+        return [
+            {**item.model_dump(), "executor": TASK_SKILLS[item.id].executor, "instructions": TASK_SKILLS[item.id].instructions}
+            if item.id in TASK_SKILLS else item.model_dump()
+            for item in registered.values()
+        ]
+
+    @app.post("/api/job-batches/greetings")
+    def prepare_job_greetings(payload: BatchJobsRequest):
+        return app.state.job_batch.prepare(payload.job_ids)
+
+    @app.post("/api/job-batches/platform-apply")
+    def apply_jobs_in_batch(payload: BatchPlatformRequest):
+        return app.state.job_batch.apply_native(payload.job_ids)
 
     @app.post("/api/skills/{skill_id}/run")
     def run_skill(skill_id: str, payload: SkillRunRequest | None = None):
