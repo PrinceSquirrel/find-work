@@ -1,8 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type JobGreetingDraft, type BatchPlatformResult } from "./lib/api";
+import { api, type JobGreetingDraft, type BatchPlatformResult, type GreetingProfile } from "./lib/api";
 import type { JobPosting } from "./types";
 
 export const JOB_BATCH_LIMIT = 8;
+const INTRO_KEY = "squirrel-world.greeting-introduction.v1";
+const emptyProfile: GreetingProfile = { introduction: "", availability: "" };
+
+function loadProfile(): GreetingProfile {
+  try {
+    const value = JSON.parse(localStorage.getItem(INTRO_KEY) ?? "null");
+    if (typeof value?.introduction === "string" && value.introduction.length <= 50 &&
+        typeof value.availability === "string" && value.availability.length <= 25) {
+      return { introduction: value.introduction, availability: value.availability };
+    }
+  } catch { /* Opening the dialog should work without browser storage. */ }
+  return emptyProfile;
+}
 
 function canSend(job: JobPosting) {
   try {
@@ -32,10 +45,14 @@ export function JobBatchDialog({ jobs, onClose, onRefresh }: {
   const [attempted, setAttempted] = useState(false);
   const [outcomes, setOutcomes] = useState<BatchPlatformResult[]>([]);
   const [feedback, setFeedback] = useState("");
+  const [profile, setProfile] = useState(loadProfile);
+  const [profileDraft, setProfileDraft] = useState(profile);
+  const [profileNotice, setProfileNotice] = useState("");
+  const profileDirty = profileDraft.introduction !== profile.introduction || profileDraft.availability !== profile.availability;
   const reviewed = jobs.filter(job => included.includes(job.id) && canSend(job)).map(job => ({
     job_id: job.id, text: edits[job.id] ?? drafts.find(item => item.job_id === job.id)?.text ?? ""
   }));
-  const sendable = reviewed.length > 0 && reviewed.every(item => isReviewedText(item.text));
+  const sendable = !profileDirty && reviewed.length > 0 && reviewed.every(item => isReviewedText(item.text));
   useEffect(() => {
     const trigger = document.activeElement;
     const node = dialog.current;
@@ -46,8 +63,33 @@ export function JobBatchDialog({ jobs, onClose, onRefresh }: {
     };
   }, []);
 
+  function saveProfile() {
+    if (inFlight.current || dispatched.current || !profileDirty) return;
+    const values = {
+      introduction: profileDraft.introduction.trim().replace(/[。，；！!?？]+$/u, ""),
+      availability: profileDraft.availability.trim().replace(/[。，；！!?？]+$/u, ""),
+    };
+    if (Object.values(values).some(value => /[\x00-\x1f\x7f]/u.test(value))) {
+      setProfileNotice("开场资料只能包含单行文字，请检查后再保存。");
+      return;
+    }
+    setProfile(values);
+    setProfileDraft(values);
+    setApproval(false);
+    setDrafts([]);
+    setIncluded([]);
+    setEdits({});
+    setFeedback("");
+    try {
+      localStorage.setItem(INTRO_KEY, JSON.stringify(values));
+      setProfileNotice(values.introduction || values.availability ? "已确认并保存，下次生成会自动复用。" : "已清除开场资料。");
+    } catch {
+      setProfileNotice("已应用到本次生成，当前浏览器无法长期保存。");
+    }
+  }
+
   async function prepare() {
-    if (inFlight.current || dispatched.current) return;
+    if (profileDirty || inFlight.current || dispatched.current) return;
     inFlight.current = true;
     setBusy("prepare");
     setFeedback("");
@@ -56,7 +98,7 @@ export function JobBatchDialog({ jobs, onClose, onRefresh }: {
     setIncluded([]);
     setEdits({});
     try {
-      const { items } = await api.prepareJobGreetings(jobs.map(job => job.id));
+      const { items } = await api.prepareJobGreetings(jobs.map(job => job.id), profile);
       const ready = items.filter(item => item.status === "ready");
       setDrafts(items);
       setIncluded(jobs.filter(job => canSend(job) && ready.some(item => item.job_id === job.id)).map(job => job.id));
@@ -99,14 +141,31 @@ export function JobBatchDialog({ jobs, onClose, onRefresh }: {
     }
   }
 
-  return <dialog ref={dialog} className="job-detail-modal job-focus-dialog" aria-label="招呼语与批量投递"
+  return <dialog ref={dialog} className="job-detail-modal job-focus-dialog" aria-label="招呼语与批量发送"
     onCancel={event => { event.preventDefault(); if (!inFlight.current) onClose(); }}>
     <div className="job-focus-content">
       <header className="modal-heading"><div><span>岗位行动清单</span><h2>为 {jobs.length} 个岗位准备招呼语</h2></div>
         <button type="button" autoFocus disabled={!!busy} onClick={onClose}>关闭</button></header>
       <p>先按每份 JD 生成草稿，核对岗位和正文后再发送。BOSS 可发送审核后的招呼语；其他平台可复制后手动发送。</p>
+      <details className="job-preference-card">
+        <summary>我的招呼开场 <b>{profile.introduction || profile.availability ? "已确认" : "未填写（可选）"}</b></summary>
+        <p>填写真实的届别、学校、专业和学历；实习岗位可补到岗安排。不填则不会猜测。这两项由本地工作台加入草稿，不传给模型。</p>
+        <div className="split-list">
+          <label>身份开场<input value={profileDraft.introduction} maxLength={50} disabled={!!busy || attempted}
+            placeholder="例如：我是2028届某大学管理科学与工程专业硕士研究生"
+            onChange={event => { setApproval(false); setProfileNotice(""); setProfileDraft(current => ({ ...current, introduction: event.target.value })); }} /></label>
+          <label>到岗安排（选填）<input value={profileDraft.availability} maxLength={25} disabled={!!busy || attempted}
+            placeholder="例如：每周可到岗4天，能实习3个月"
+            onChange={event => { setApproval(false); setProfileNotice(""); setProfileDraft(current => ({ ...current, availability: event.target.value })); }} /></label>
+        </div>
+        <div className="job-detail-actions">
+          <button type="button" disabled={!profileDirty || !!busy || attempted} onClick={saveProfile}>确认本人信息并保存</button>
+          {profileDirty && <small>请先确认保存，再生成招呼语。</small>}
+          {profileNotice && <small role="status">{profileNotice}</small>}
+        </div>
+      </details>
       <div className="job-detail-actions">
-        <button type="button" className="primary" disabled={!!busy || attempted} onClick={() => void prepare()}>{busy === "prepare" ? "逐个读取 JD 并生成…" : "一键生成各岗位招呼语"}</button>
+        <button type="button" className="primary" disabled={!!busy || attempted || profileDirty} onClick={() => void prepare()}>{busy === "prepare" ? "逐个读取 JD 并生成…" : "一键生成各岗位招呼语"}</button>
       </div>
       {feedback && <div className="inline-note" role="status">{feedback}</div>}
       {jobs.map(job => {

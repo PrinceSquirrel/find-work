@@ -50,6 +50,11 @@ export interface JobGreetingDraft {
   model?: string;
 }
 
+export interface GreetingProfile {
+  introduction: string;
+  availability: string;
+}
+
 export interface BatchPlatformResult {
   job_id: number;
   status: "confirmed" | "skipped" | "blocked" | "unknown" | "not_attempted";
@@ -328,8 +333,11 @@ export const api = {
     });
   },
 
-  prepareJobGreetings(jobIds: number[]): Promise<{items: JobGreetingDraft[]}> {
-    return request("/api/job-batches/greetings", { method: "POST", body: JSON.stringify({ job_ids: jobIds }) });
+  prepareJobGreetings(jobIds: number[], profile?: GreetingProfile): Promise<{items: JobGreetingDraft[]}> {
+    const body = profile && (profile.introduction || profile.availability)
+      ? { job_ids: jobIds, profile: { ...profile, confirmed: true } }
+      : { job_ids: jobIds };
+    return request("/api/job-batches/greetings", { method: "POST", body: JSON.stringify(body) });
   },
 
   applyPlatformBatch(jobIds: number[], confirmed: true): Promise<{items: BatchPlatformResult[]}> {

@@ -5,6 +5,8 @@ async (page) => {
     match: { score: 80, recommendation: "strong_apply", hit_reasons: [], gap_reasons: [] } }));
   let preparations = 0;
   let submissions = 0;
+  const intro = "我是2028届示例大学管理科学与工程专业硕士研究生";
+  const availability = "每周可到岗4天";
   const reviewedText = "您好，我审核了用户调研的内容。\n方便交流吗？";
   const check = (value, message) => { if (!value) throw Error(message); };
   await page.route("**/api/**", async route => {
@@ -14,8 +16,10 @@ async (page) => {
     if (path === "/api/applications") return route.fulfill({ json: [] });
     if (path === "/api/job-batches/greetings") {
       preparations++;
-      check(JSON.stringify([...request.postDataJSON().job_ids].sort()) === "[401,402]", "Incorrect greeting selection");
-      return route.fulfill({ json: { items: jobs.map(job => ({ job_id: job.id, status: "ready", mode: "local", text: "您好，想交流：" + job.description })) } });
+      const payload = request.postDataJSON();
+      check(JSON.stringify([...payload.job_ids].sort()) === "[401,402]", "Incorrect greeting selection");
+      check(JSON.stringify(payload.profile) === JSON.stringify({introduction: intro, availability, confirmed: true}), "Wrong profile confirmation payload");
+      return route.fulfill({ json: { items: jobs.map(job => ({ job_id: job.id, status: "ready", mode: "local", text: `您好，${intro}。想交流：${job.description}。${availability}。` })) } });
     }
     if (path === "/api/job-batches/send-greetings") {
       submissions++;
@@ -30,13 +34,21 @@ async (page) => {
     await page.getByRole("button", { name: "岗位雷达", exact: true }).click();
     await page.getByRole("checkbox", { name: /选择岗位 #401/ }).check();
     await page.getByRole("checkbox", { name: /选择岗位 #402/ }).check();
-    await page.getByRole("button", { name: "准备招呼语／批量投递（2）" }).click();
-    const panel = page.getByRole("dialog", { name: "招呼语与批量投递" });
-    await panel.getByRole("button", { name: "一键生成各岗位招呼语" }).click();
+    const entry = page.getByRole("button", { name: "准备招呼语／批量发送（2）" });
+    await entry.click();
+    const panel = page.getByRole("dialog", { name: "招呼语与批量发送" });
+    const prepare = panel.getByRole("button", { name: "一键生成各岗位招呼语" });
+    await panel.locator("summary").click();
+    await panel.getByRole("textbox", { name: "身份开场" }).fill(intro);
+    await panel.getByRole("textbox", { name: "到岗安排（选填）" }).fill(availability);
+    check(await prepare.isDisabled(), "Unconfirmed identity should not be included");
+    await panel.getByRole("button", { name: "确认本人信息并保存" }).click();
+    await prepare.click();
     await panel.getByText("已为 2 个岗位生成草稿；没有发出任何消息。").waitFor();
     check(preparations === 1 && submissions === 0, "Preparation sent a message");
     check((await panel.getByRole("textbox", { name: "合成批量岗位401招呼语" }).inputValue()).includes("用户访谈"), "Wrong JD for first draft");
-    check((await panel.getByRole("textbox", { name: "合成批量岗位402招呼语" }).inputValue()).includes("数据分析"), "Wrong JD for second draft");
+    const secondDraft = await panel.getByRole("textbox", { name: "合成批量岗位402招呼语" }).inputValue();
+    check(secondDraft.includes("数据分析") && secondDraft.includes(intro) && secondDraft.includes(availability), "Wrong JD or intro for second draft");
     await panel.getByRole("checkbox", { name: /我确认/ }).check();
     await panel.getByRole("region", { name: "合成批量岗位402" }).getByRole("checkbox", { name: "加入发送" }).uncheck();
     const submit = panel.getByRole("button", { name: "发送 1 条招呼语" });
@@ -50,7 +62,10 @@ async (page) => {
     check(submissions === 1 && await submit.isDisabled(), "Result error triggered duplicate action");
     await panel.getByRole("button", { name: "关闭", exact: true }).click();
     await panel.waitFor({ state: "hidden" });
-    return { passed: true, checks: ["different JD drafts", "explicit approval", "approval resets on selection and edit", "exact edited text", "single request", "unconfirmed result"] };
+    await entry.click();
+    await panel.locator("summary").click();
+    check(await panel.getByRole("textbox", { name: "身份开场" }).inputValue() === intro, "Saved profile was not reused");
+    return { passed: true, checks: ["different JD drafts", "confirmed intro and reuse", "explicit approval", "approval resets on selection and edit", "exact edited text", "single request", "unconfirmed result"] };
   } finally {
     await page.unrouteAll({ behavior: "wait" });
   }

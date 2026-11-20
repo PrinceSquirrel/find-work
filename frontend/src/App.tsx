@@ -2903,7 +2903,7 @@ function App() {
             message={deletionMessages.jobs} />
           {selectedJobBatch.length > 0 && <div className="bulk-record-actions">
             <button type="button" className="primary" disabled={batchUnavailable || selectedJobBatch.length > JOB_BATCH_LIMIT}
-              onClick={() => setBatchJobs(selectedJobBatch)}>准备招呼语／批量投递（{selectedJobBatch.length}）</button>
+              onClick={() => setBatchJobs(selectedJobBatch)}>准备招呼语／批量发送（{selectedJobBatch.length}）</button>
             <small>只处理当前勾选的岗位，每批最多 {JOB_BATCH_LIMIT} 个。</small>
           </div>}
           <div className="toolbar">
