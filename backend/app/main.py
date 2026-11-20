@@ -42,7 +42,7 @@ from app.services import JobApplicationService
 from app.services.application_sync_service import ApplicationSyncService
 from app.services.browser_job_extractor_service import BrowserJobExtractorService
 from app.services.evidence_service import EvidenceConflictError, EvidenceModelError, EvidenceService
-from app.services.job_batch_service import BatchGreetingSendRequest, BatchJobsRequest, BatchPlatformRequest, JobBatchService
+from app.services.job_batch_service import BatchGreetingRequest, BatchGreetingSendRequest, BatchPlatformRequest, JobBatchService
 from app.services.task_skills import TASK_SKILLS
 from app.services.job_application_service import LowQualityJobDetailError, PlatformApplicationNotConfirmedError
 from app.services.llm_client_service import LLMClientUnavailable, OpenAICompatibleClient
@@ -88,6 +88,14 @@ SKILL_REGISTRY = [
         risk_level="high",
         requires_confirmation=True,
         input_schema={"job_id": "int", "note": "str"},
+    ),
+    SkillDefinition(
+        id="application.greeting.send",
+        name="发送审核后的招呼语",
+        description="只能由用户在招呼语清单核对正文后发起，模型和通用技能入口不可发送。",
+        risk_level="high",
+        requires_confirmation=True,
+        input_schema={"items": "list[{job_id, text}]", "confirmed": "true"},
     ),
     SkillDefinition(
         id="application.sync.readonly",
@@ -644,8 +652,8 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
         ]
 
     @app.post("/api/job-batches/greetings")
-    def prepare_job_greetings(payload: BatchJobsRequest):
-        return app.state.job_batch.prepare(payload.job_ids)
+    def prepare_job_greetings(payload: BatchGreetingRequest):
+        return app.state.job_batch.prepare(payload.job_ids, profile=payload.profile)
 
     @app.post("/api/job-batches/platform-apply")
     def apply_jobs_in_batch(payload: BatchPlatformRequest):
@@ -678,6 +686,8 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
                 "message": "知识库已重建。",
                 "result": result.model_dump(),
             }
+        if skill.id == "application.greeting.send":
+            raise HTTPException(status_code=409, detail="请在工作台的招呼语清单核对岗位和正文后确认发送。")
         return {
             "skill_id": skill.id,
             "status": "registered",

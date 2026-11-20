@@ -23,6 +23,49 @@ class BatchPlatformRequest(BatchJobsRequest):
     confirmed: Literal[True]
 
 
+class GreetingProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    introduction: Annotated[str, Field(strict=True, max_length=50)] = ""
+    availability: Annotated[str, Field(strict=True, max_length=25)] = ""
+    confirmed: StrictBool
+
+    @field_validator("introduction", "availability")
+    @classmethod
+    def clean_fact(cls, value: str) -> str:
+        if any(char in value for char in "\r\n\t"):
+            raise ValueError("开场资料请填写单行事实。")
+        return value.strip().rstrip("。，；！!?")
+
+    @model_validator(mode="after")
+    def verified_by_user(self):
+        if not self.confirmed:
+            raise ValueError("身份和出勤安排需要本人确认。")
+        return self
+
+
+class BatchGreetingRequest(BatchJobsRequest):
+    profile: GreetingProfile | None = None
+
+
+def compose_greeting(body: str, profile: GreetingProfile | None) -> str:
+    body = re.sub(r"^您好[\s，,。！!：:]+", "", body.strip()).strip()
+    if not body:
+        raise ValueError("empty greeting body")
+    introduction = f"{profile.introduction}。" if profile and profile.introduction else ""
+    availability = f"{profile.availability}。" if profile and profile.availability else ""
+    text = f"您好，{introduction}{body}"
+    if availability:
+        # Keep the invitation last if it is a question, so it remains easy to answer.
+        parts = re.split(r"(?<=[。！？!?])", body)
+        if len(parts) > 2 and parts[-2].endswith(("？", "?")):
+            text = f"您好，{introduction}{''.join(parts[:-2])}{availability}{parts[-2]}"
+        else:
+            text = f"您好，{introduction}{availability}{body}"
+    if len(text) > 180:
+        raise ValueError("greeting exceeds 180 characters")
+    return text
+
+
 class ReviewedGreeting(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: Annotated[int, Field(strict=True, gt=0)]
@@ -63,13 +106,13 @@ class JobBatchService:
         self.evidence = evidence
         self.lock = Lock()
 
-    def prepare(self, job_ids: list[int]) -> dict:
+    def prepare(self, job_ids: list[int], profile: GreetingProfile | None = None) -> dict:
         with self.lock:
             config = self.jobs.store.get_agent_model_route("ApplicationWriterAgent")
             route = self.jobs.model_router.route_for_agent("ApplicationWriterAgent", config)
-            return {"items": [self._greeting(job_id, config, route.mode) for job_id in dict.fromkeys(job_ids)]}
+            return {"items": [self._greeting(job_id, config, route.mode, profile) for job_id in dict.fromkeys(job_ids)]}
 
-    def _greeting(self, job_id, config, mode) -> dict:
+    def _greeting(self, job_id, config, mode, profile) -> dict:
         base = {"job_id": job_id, "skill_id": "application.greeting"}
         try:
             job = self.jobs.store.get_job(job_id)
@@ -80,7 +123,7 @@ class JobBatchService:
             if job.detail_status not in {"detail_fetched", "manual_filled"} or not job.description.strip():
                 return {**base, "status": "needs_jd", "message": "缺少完整 JD，请在岗位详情中刷新或补充正文。"}
             recommendations = self.evidence.recommend_cards(job_id)
-            cards = [item.card for item in recommendations if item.score >= 40 and item.card.category != "education"
+            cards = [item.card for item in recommendations if item.score >= 40 and item.card.status == "confirmed" and item.card.category != "education"
                      and (item.card.provenance_type != "document" or item.card.quote_verified)]
             if mode == "external":
                 result = self.jobs.llm_client.generate_job_greeting(config, job, cards[:6])
@@ -88,13 +131,20 @@ class JobBatchService:
                 text = payload.get("greeting_message") if isinstance(payload, dict) else None
                 if not isinstance(text, str) or not text.strip() or len(text.strip()) > 180:
                     return {**base, "status": "failed", "message": "模型没有返回有效招呼语，请重试。"}
+                try:
+                    text = compose_greeting(text, profile)
+                except ValueError:
+                    return {**base, "status": "failed", "message": "生成正文过长或为空；保留身份未发送，请重试。"}
                 self.evidence._record_llm_usage("ApplicationWriterAgent", result, config)
-                return {**base, "status": "ready", "text": text.strip(), "mode": "model", "model": config.model}
+                return {**base, "status": "ready", "text": text, "mode": "model", "model": config.model}
             sentences = re.split(r"[。；\n]", job.description)
             focus = next((" ".join(s.split()).strip(" ：:、-") for s in sentences if len(s.strip()) >= 8), "")
-            focus = (focus or " ".join(job.description.split()))[:42]
-            title = job.title.strip()[:42]
-            text = f"您好，我对贵司的「{title}」岗位感兴趣，尤其想了解 JD 中提到的「{focus}」。方便交流一下具体工作内容吗？"
+            focus = (focus or " ".join(job.description.split()))[:28]
+            title = job.title.strip()[:26]
+            action = next((action.strip(" ，。；") for card in cards[:3] for action in card.actions
+                           if 3 <= len(action.strip()) <= 22 and re.match(r"^(负责|参与|设计|完成|搭建|梳理|协助|开发|分析|维护|整理|策划|访谈)", action.strip())), "")
+            fact = f"我曾{action}。" if action else ""
+            text = compose_greeting(f"关注贵司「{title}」，想了解「{focus}」。{fact}方便进一步交流吗？", profile)
             return {**base, "status": "ready", "text": text, "mode": "local"}
         except LLMClientUnavailable as exc:
             return {**base, "status": "failed", "message": str(exc)}

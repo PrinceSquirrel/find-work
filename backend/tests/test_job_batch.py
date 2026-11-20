@@ -141,3 +141,37 @@ def test_proven_no_action_can_retry_after_login_and_other_platform_does_not_send
     assert not store.list_applications()
     assert [x["status"] for x in client.post("/api/job-batches/send-greetings", json=request).json()["items"]] == ["skipped", "confirmed"]
     assert calls == [boss.id, boss.id]
+
+
+def test_greeting_joins_user_confirmed_profile_without_sending_it_to_model(tmp_path, monkeypatch):
+    client, service = setup_batch(tmp_path, monkeypatch)
+    path = "/api/job-batches/greetings"
+    introduction = "我是2028届示例大学管理科学与工程专业硕士研究生"
+    availability = "每周可到岗4天"
+    profile = {"introduction": introduction, "availability": availability, "confirmed": True}
+    assert client.post(path, json={"job_ids": [1], "profile": {**profile, "confirmed": False}}).status_code == 422
+    default = client.post(path, json={"job_ids": [1]}).json()["items"][0]
+    assert introduction not in default["text"] and availability not in default["text"]
+    local = client.post(path, json={"job_ids": [1], "profile": profile}).json()["items"][0]
+    assert local["text"].startswith(f"您好，{introduction}。")
+    assert availability + "。方便" in local["text"] and "用户访谈" in local["text"]
+    calls = []
+    def draft(_config, selected_job, cards):
+        calls.append((selected_job.id, cards))
+        return SimpleNamespace(content='{"greeting_message":"您好！关注贵司产品实习中的用户访谈。方便交流吗？"}')
+    monkeypatch.setattr(service.model_router, "route_for_agent", lambda *_: SimpleNamespace(mode="external"))
+    monkeypatch.setattr(service.llm_client, "generate_job_greeting", draft)
+    monkeypatch.setattr(client.app.state.evidence_service, "_record_llm_usage", lambda *_: None)
+    model = client.post(path, json={"job_ids": [1], "profile": profile}).json()["items"][0]
+    assert model["text"] == f"您好，{introduction}。关注贵司产品实习中的用户访谈。{availability}。方便交流吗？"
+    assert calls == [(1, [])]
+
+
+def test_send_skill_only_runs_through_reviewed_queue(tmp_path, monkeypatch):
+    client, _ = setup_batch(tmp_path, monkeypatch)
+    skills = {row["id"]: row for row in client.get("/api/skills").json()}
+    sending = skills["application.greeting.send"]
+    assert sending["executor"] == "local" and sending["risk_level"] == "high" and sending["requires_confirmation"]
+    assert skills["job.preference"]["executor"] == "local"
+    assert client.post("/api/skills/application.greeting.send/run").json()["status"] == "requires_confirmation"
+    assert client.post("/api/skills/application.greeting.send/run", json={"confirmed": True}).status_code == 409
