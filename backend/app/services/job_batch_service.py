@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from threading import Lock
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
+from app.services.boss_greeting_service import BossGreetingService, ORIGIN
 from app.services.llm_client_service import LLMClientUnavailable
 from app.services.platform_session_service import PLATFORM_HOSTS
 
@@ -19,6 +21,31 @@ class BatchJobsRequest(BaseModel):
 
 class BatchPlatformRequest(BatchJobsRequest):
     confirmed: Literal[True]
+
+
+class ReviewedGreeting(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: Annotated[int, Field(strict=True, gt=0)]
+    text: Annotated[str, Field(strict=True, min_length=1, max_length=180)]
+
+    @field_validator("text")
+    @classmethod
+    def exact_reviewed_text(cls, value: str) -> str:
+        if value != value.strip() or re.search(r"[\x00-\x09\x0b-\x1f\x7f]", value):
+            raise ValueError("招呼语不能有首尾空白或不可打印控制字符。")
+        return value
+
+
+class BatchGreetingSendRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[ReviewedGreeting] = Field(min_length=1, max_length=8)
+    confirmed: StrictBool
+
+    @model_validator(mode="after")
+    def approved_distinct_jobs(self):
+        if self.confirmed is not True or len({row.job_id for row in self.items}) != len(self.items):
+            raise ValueError("发送前必须确认，且同一岗位不能重复提交。")
+        return self
 
 
 def is_platform_job(job) -> bool:
@@ -107,3 +134,52 @@ class JobBatchService:
                     held = True
                     items.append({"job_id": job_id, "status": "unknown", "message": "未取得该岗位的发送证明，已暂停。请核对平台，不要直接重发。"})
             return {"items": items}
+
+    def send_reviewed_greetings(self, reviewed: list[ReviewedGreeting]) -> dict:
+        with self.lock:
+            store = self.jobs.store
+            sent = {record.job_id for record in store.list_applications()}
+            results = []
+            held = False
+            for row in reviewed:
+                base = {"job_id": row.job_id}
+                if held:
+                    results.append({**base, "status": "not_attempted", "message": "前项待核对，这一项未操作。"})
+                    continue
+                try:
+                    job = store.get_job(row.job_id)
+                    if row.job_id in sent:
+                        results.append({**base, "status": "skipped", "message": "已有投递记录，没有重复发送。"})
+                        continue
+                    url = urlparse(job.url)
+                    if (job.platform != "boss" or not is_platform_job(job) or f"{url.scheme}://{url.netloc}" != ORIGIN
+                            or not url.path.endswith(".html")):
+                        results.append({**base, "status": "skipped", "message": "自定义发送仅支持可核验的 BOSS 岗位；可复制后手动发送。"})
+                        continue
+                    if not store.reserve_boss_greeting(url.path):
+                        held = True
+                        results.append({**base, "status": "unknown", "message": "此平台岗位已有发送尝试，请核对原会话，系统不会重发。"})
+                        continue
+                    outcome = BossGreetingService().send(job, row.text)
+                    status = outcome.get("status")
+                    message = outcome.get("message", "未获得平台回执，请核对聊天记录，不要直接重发。")
+                    if status in {"confirmed", "already_confirmed"}:
+                        proof = self.jobs._platform_application_proof(job.platform, {
+                            "evidence": message, "source_url": ORIGIN + url.path,
+                            "action": "sent_custom_greeting", "status": "applied", "button_text": "发送",
+                        })
+                        store.create_application(job, note="平台已确认自定义招呼语；未操作简历附件。", platform_proof=proof)
+                        sent.add(row.job_id)
+                        results.append({**base, "status": "confirmed", "message": message})
+                    else:
+                        if status == "blocked":
+                            store.release_unsent_boss_greeting(url.path)
+                        held = True
+                        results.append({**base, "status": "blocked" if status == "blocked" else "unknown", "message": message})
+                except KeyError:
+                    held = True
+                    results.append({**base, "status": "unknown", "message": "岗位无法核对，请刷新并检查平台状态。"})
+                except (OSError, RuntimeError, ValueError, sqlite3.Error):
+                    held = True
+                    results.append({**base, "status": "unknown", "message": "发送或本地保存未能确认，请核对平台，不要直接重发。"})
+            return {"items": results}

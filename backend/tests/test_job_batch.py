@@ -3,7 +3,8 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.schemas import JobPosting
+from app.schemas import JobMatch, JobPosting
+from app.services import job_batch_service
 from app.services.llm_client_service import LLMClientUnavailable
 
 
@@ -88,3 +89,55 @@ def test_invalid_platform_url_never_reaches_browser(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "preview_platform_application", lambda _: (_ for _ in ()).throw(AssertionError("invalid URL reached browser")))
     response = client.post("/api/job-batches/platform-apply", json={"job_ids": [1], "confirmed": True})
     assert response.json()["items"][0]["status"] == "skipped"
+
+
+def test_reviewed_send_keeps_exact_text_and_only_persists_proven_results(tmp_path, monkeypatch):
+    db_path = tmp_path / "send.db"
+    app = create_app(db_path)
+    store = app.state.service.store
+    jobs = [store.save_job(job(i, f"合成岗位 {i}", "岗位需求"), 1, JobMatch(score=80, recommendation="review")) for i in range(1, 4)]
+    payload = {"items": [{"job_id": item.id, "text": f"已审核 {i}\n面向这份 JD。"} for i, item in enumerate(jobs)], "confirmed": True}
+    calls = []
+
+    def send(job, text):
+        calls.append((job.id, text))
+        if job.id == jobs[0].id:
+            return {"status": "confirmed", "message": "出站原文获平台确认。"}
+        return {"status": "unknown", "message": "未收到回执。"}
+
+    monkeypatch.setattr(job_batch_service, "BossGreetingService", lambda: SimpleNamespace(send=send))
+    client = TestClient(app)
+    path = "/api/job-batches/send-greetings"
+    for invalid in [{**payload, "confirmed": False}, {**payload, "confirmed": 1},
+                    {**payload, "items": payload["items"][:1] * 2}, {**payload, "items": [{"job_id": 1, "text": " "}]}]:
+        assert client.post(path, json=invalid).status_code == 422
+    assert not calls
+    result = client.post(path, json=payload).json()["items"]
+    assert [item["status"] for item in result] == ["confirmed", "unknown", "not_attempted"]
+    assert calls == [(item["job_id"], item["text"]) for item in payload["items"][:2]]
+    records = store.list_applications()
+    assert len(records) == 1 and records[0].platform_proof.action == "sent_custom_greeting"
+    assert records[0].platform_proof.source_url == jobs[0].url
+    assert payload["items"][0]["text"] not in records[0].latest_note
+    recreated = TestClient(create_app(db_path))
+    assert [row["status"] for row in recreated.post(path, json=payload).json()["items"]] == ["skipped", "unknown", "not_attempted"]
+    assert len(calls) == 2
+
+
+def test_proven_no_action_can_retry_after_login_and_other_platform_does_not_send(tmp_path, monkeypatch):
+    app = create_app(tmp_path / "blocked.db")
+    store = app.state.service.store
+    boss = store.save_job(job(1, "合成岗位", "岗位需求"), 1, JobMatch(score=80, recommendation="review"))
+    other = store.save_job(job(2, "另一个岗位", "岗位需求").model_copy(update={"platform": "shixiseng"}), 1,
+                           JobMatch(score=80, recommendation="review"))
+    calls = []
+    def send(job, text):
+        calls.append(job.id)
+        return {"status": "blocked", "message": "还未登录。"} if len(calls) == 1 else {"status": "already_confirmed", "message": "原文已有回执。"}
+    monkeypatch.setattr(job_batch_service, "BossGreetingService", lambda: SimpleNamespace(send=send))
+    client = TestClient(app)
+    request = {"items": [{"job_id": item.id, "text": "我审核的招呼"} for item in (other, boss)], "confirmed": True}
+    assert [x["status"] for x in client.post("/api/job-batches/send-greetings", json=request).json()["items"]] == ["skipped", "blocked"]
+    assert not store.list_applications()
+    assert [x["status"] for x in client.post("/api/job-batches/send-greetings", json=request).json()["items"]] == ["skipped", "confirmed"]
+    assert calls == [boss.id, boss.id]

@@ -42,7 +42,7 @@ from app.services import JobApplicationService
 from app.services.application_sync_service import ApplicationSyncService
 from app.services.browser_job_extractor_service import BrowserJobExtractorService
 from app.services.evidence_service import EvidenceConflictError, EvidenceModelError, EvidenceService
-from app.services.job_batch_service import BatchJobsRequest, BatchPlatformRequest, JobBatchService
+from app.services.job_batch_service import BatchGreetingSendRequest, BatchJobsRequest, BatchPlatformRequest, JobBatchService
 from app.services.task_skills import TASK_SKILLS
 from app.services.job_application_service import LowQualityJobDetailError, PlatformApplicationNotConfirmedError
 from app.services.llm_client_service import LLMClientUnavailable, OpenAICompatibleClient
@@ -650,6 +650,10 @@ def create_app(db_path: str | Path = "data/agent-business.sqlite3") -> FastAPI:
     @app.post("/api/job-batches/platform-apply")
     def apply_jobs_in_batch(payload: BatchPlatformRequest):
         return app.state.job_batch.apply_native(payload.job_ids)
+
+    @app.post("/api/job-batches/send-greetings")
+    def send_reviewed_greetings(payload: BatchGreetingSendRequest):
+        return app.state.job_batch.send_reviewed_greetings(payload.items)
 
     @app.post("/api/skills/{skill_id}/run")
     def run_skill(skill_id: str, payload: SkillRunRequest | None = None):

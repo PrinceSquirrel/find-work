@@ -177,6 +177,10 @@ class SQLiteStore:
                     occurred_at TEXT NOT NULL,
                     note TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS boss_greeting_attempts (
+                    job_path TEXT PRIMARY KEY,
+                    started_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS llm_usage (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     agent_name TEXT NOT NULL,
@@ -1616,6 +1620,17 @@ class SQLiteStore:
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
 
+    def reserve_boss_greeting(self, job_path: str) -> bool:
+        with self._connect() as conn:
+            return conn.execute(
+                "INSERT OR IGNORE INTO boss_greeting_attempts (job_path, started_at) VALUES (?, ?)",
+                (job_path, datetime.now(UTC).isoformat()),
+            ).rowcount == 1
+
+    def release_unsent_boss_greeting(self, job_path: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM boss_greeting_attempts WHERE job_path = ?", (job_path,))
+
     def create_application(
         self,
         job: JobPosting,
@@ -1626,7 +1641,7 @@ class SQLiteStore:
                 or platform_proof.platform != job.platform or not platform_proof.source_url.strip()
                 or not platform_proof.evidence.strip()
                 or platform_proof.status not in {"applied", "already_applied"}
-                or platform_proof.action not in {"clicked_apply", "already_confirmed"}):
+                or platform_proof.action not in {"clicked_apply", "already_confirmed", "sent_custom_greeting"}):
             raise ValueError("仅在平台确认招呼已发送或简历已投递后保存记录。")
         now = datetime.now(UTC)
         tracker = ApplicationTrackerAgent()
