@@ -741,9 +741,11 @@ class JobApplicationService:
         self._record_usage("ApplicationTrackerAgent", job.title, record.current_status.value)
         return record
 
-    def apply_to_platform(self, job_id: int, note: str = "") -> ApplicationRecord:
+    def apply_to_platform(self, job_id: int, note: str = "", *, expected_button: str | None = None) -> ApplicationRecord:
         job = self.store.get_job(job_id)
-        platform_result = BrowserJobExtractorService().apply_to_job(job.platform, job.url)
+        extractor = BrowserJobExtractorService()
+        platform_result = (extractor.apply_to_job(job.platform, job.url, expected_button=expected_button)
+                           if expected_button else extractor.apply_to_job(job.platform, job.url))
         if platform_result.get("confirmed") is not True or platform_result.get("status") not in {"applied", "already_applied"}:
             evidence = str(platform_result.get("evidence") or platform_result.get("status") or "platform not confirmed")
             raise PlatformApplicationNotConfirmedError(evidence)

@@ -435,6 +435,34 @@ Object.defineProperty(document.body,'innerText',{get:()=>body});
     assert payload["clicks"] == 1
 
 
+@pytest.mark.parametrize("case,clicks,confirmed", [
+    ("wrong_page", 0, False), ("wrong_button", 0, False), ("old_notice", 1, False),
+    ("unrelated_text", 1, False), ("switched_after_click", 1, False), ("fresh_notice", 1, True),
+])
+def test_batch_click_only_confirms_fresh_notice_on_same_job(case, clicks, confirmed):
+    url = "https://www.zhipin.com/job_detail/synthetic.html"
+    script = browser_job_extractor_service.BrowserJobExtractorService()._application_click_script("boss", url, "立即沟通")
+    harness = """
+const [testCase,url] = INPUT;
+let clicks = 0;
+const body = {innerText:'岗位详情'};
+const notice = {innerText:'投递成功', getClientRects:()=>[1]};
+globalThis.setTimeout = callback => callback();
+globalThis.location = {href:testCase==='wrong_page' ? url+'-wrong' : url};
+const action = {innerText:testCase==='wrong_button' ? '投递简历' : '立即沟通',
+  offsetParent:{}, getAttribute:()=>null, click:()=>{clicks++;
+    if (testCase==='unrelated_text') body.innerText='其他岗位已发送';
+    if (testCase==='switched_after_click') location.href=url+'-wrong';
+  }};
+globalThis.document = {body, querySelector:()=>null, querySelectorAll:selector=>
+  selector.includes(".toast") ? (testCase==='old_notice'||(clicks&&['fresh_notice','switched_after_click'].includes(testCase))?[notice]:[]) : [action]};
+""".replace("INPUT", json.dumps([case, url], ensure_ascii=False))
+    result = subprocess.run(["node", "--input-type=module", "-e", harness + "const result=await " + script + ";console.log(JSON.stringify({result,clicks}));"], capture_output=True, text=True, encoding="utf-8", check=True)
+    payload = json.loads(result.stdout)
+    assert payload["clicks"] == clicks
+    assert payload["result"]["confirmed"] is confirmed
+
+
 @pytest.mark.parametrize("missing", ["confirmed_at", "source_url", "evidence", "action"])
 def test_storage_does_not_save_incomplete_platform_proof(tmp_path, missing):
     client = TestClient(create_app(db_path=tmp_path / "proof.sqlite3"))

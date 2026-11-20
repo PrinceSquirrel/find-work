@@ -333,7 +333,7 @@ class BrowserJobExtractorService:
                 sleep(0.4)
         raise ValueError("岗位详情暂时无法读取，请稍后重试")
 
-    def apply_to_job(self, platform: str, url: str) -> dict[str, object]:
+    def apply_to_job(self, platform: str, url: str, *, expected_button: str | None = None) -> dict[str, object]:
         if not self.cdp_url:
             raise ValueError("BROWSER_CDP_URL is not configured.")
         hosts = PLATFORM_HOSTS.get(platform)
@@ -349,7 +349,7 @@ class BrowserJobExtractorService:
         try:
             self.runtime_client.evaluate(websocket_url, self._open_job_script(url))
             sleep(2.5)
-            raw_result = self.runtime_client.evaluate(websocket_url, self._application_click_script(platform, url))
+            raw_result = self.runtime_client.evaluate(websocket_url, self._application_click_script(platform, url, expected_button))
         except (OSError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
             return {
                 "confirmed": False,
@@ -1009,11 +1009,12 @@ class BrowserJobExtractorService:
 }})()
 """
 
-    def _application_click_script(self, platform: str, url: str) -> str:
+    def _application_click_script(self, platform: str, url: str, expected_button: str | None = None) -> str:
         return f"""
 (async () => {{
   const platform = {json.dumps(platform)};
   const targetUrl = {json.dumps(url, ensure_ascii=False)};
+  const expectedButton = {json.dumps(expected_button, ensure_ascii=False)};
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const text = (node) => (node?.innerText || node?.textContent || "").replace(/\\s+/g, " ").trim();
   const absolute = (href) => {{
@@ -1034,19 +1035,30 @@ class BrowserJobExtractorService:
     : /投递简历|立即投递|申请职位|立即申请|报名|沟通/i;
   await sleep(800);
   let pageText = bodyText();
+  const sameJob = () => new URL(location.href).origin === new URL(targetUrl).origin &&
+    new URL(location.href).pathname === new URL(targetUrl).pathname;
+  if (expectedButton && !sameJob()) {{
+    return respond(false, "wrong_job_page", "none", "当前页面不是已核对的岗位，未点击。");
+  }}
   if (blockerPattern.test(pageText)) {{
     return respond(false, "blocked_by_platform", "none", "platform requires login, captcha, or safety verification");
   }}
   if (alreadyPattern.test(pageText)) {{
+    if (expectedButton) return respond(false, "already_or_ambiguous", "none", "页面已有沟通提示，请人工核对，未重复点击。");
     return respond(true, "already_applied", "already_confirmed", "platform page already shows applied/contacted state");
   }}
   const nodes = Array.from(document.querySelectorAll("button,a,[role='button'],.btn,[class*='btn'],[class*='button']"));
   const actions = nodes.filter(node => !nodes.some(child => child !== node && node.contains?.(child) && applyPattern.test(text(child))));
+  const successNotices = () => Array.from(document.querySelectorAll("[role='status'],[role='alert'],.toast,.el-message,.message-tip"))
+    .filter(node => node.getClientRects().length)
+    .map(text).filter(value => /^(已成功投递|简历已投递|投递成功|申请成功|招呼已发送|消息发送成功)[！!。]?$/.test(value));
+  const baselineNotices = expectedButton ? new Set(successNotices()) : null;
   for (const node of actions) {{
     const label = text(node);
     const disabled = node.disabled || node.getAttribute("aria-disabled") === "true" || /disabled/.test(node.className || "");
     const visible = node.offsetParent !== null || node.getClientRects().length > 0;
     if (!label || disabled || !visible || label.length > 48 || !applyPattern.test(label)) continue;
+    if (expectedButton && label !== expectedButton) continue;
     node.scrollIntoView?.({{ block: "center", inline: "center" }});
     node.click();
     for (let attempt = 0; attempt < 6; attempt += 1) {{
@@ -1055,7 +1067,12 @@ class BrowserJobExtractorService:
       if (blockerPattern.test(pageText)) {{
         return respond(false, "clicked_but_blocked", "clicked_apply", "平台要求登录或安全验证，尚未确认发送，请在平台处理后重试。");
       }}
-      if (alreadyPattern.test(pageText)) {{
+      if (expectedButton && !sameJob()) {{
+        return respond(false, "navigation_unconfirmed", "clicked_apply", "页面已跳转，未取得对应岗位的发送证明。");
+      }}
+      const notice = baselineNotices && successNotices().find(value => !baselineNotices.has(value));
+      if (notice) return respond(true, "applied", "clicked_apply", notice);
+      if (!expectedButton && alreadyPattern.test(pageText)) {{
         return respond(true, "applied", "clicked_apply", `clicked platform button: ${{label}}`);
       }}
     }}
