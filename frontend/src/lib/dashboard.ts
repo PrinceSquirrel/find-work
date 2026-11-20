@@ -815,7 +815,7 @@ export function summarizePlatformConfirmation(
   }
   return {
     confirmed: Boolean(evidence && sourceUrl && confirmedAt && !Number.isNaN(Date.parse(confirmedAt)) &&
-      ["applied", "already_applied"].includes(status) && ["clicked_apply", "already_confirmed"].includes(stringValue(proof?.action))),
+      ["applied", "already_applied"].includes(status) && ["clicked_apply", "already_confirmed", "sent_custom_greeting"].includes(stringValue(proof?.action))),
     evidence: evidence || pageSummary || status || legacy.evidence,
     sourceUrl: sourceUrl || legacy.sourceUrl,
     note: legacy.note,

@@ -3580,3 +3580,5 @@ Updated: 2026-07-03 Asia/Shanghai
 - S1 验证：修正 Windows 下测试读取 UTF-8 的问题后，合成会话 10 项及后端全量 214 项通过；前端 101 项、lint/build、diff 检查通过。可见页面本阶段无变化。接下来接入队列、记录保护与页面；提交 fix: verify reviewed greetings in the matching Boss chat，随后同步并比对远端。
 - S1 `159b31b52e72fb350a74cd1af89445abee0d6695` 已推送并核对一致。S2 五文件：队列服务、路由、存储、队列测试、本记录。新接口只接受明确同意的逐岗原文；没有回执立即暂停，持久化去重防止刷新/重启后重发。只有真正的平台确认形成记录；不落库招呼语正文、不发送附件。前端仍待接线。
 - S2 验证：发送相关 16 项及后端全量 216 项通过；前端 101 项、lint/build 通过。本阶段的浏览器界面未变，API 用隔离数据验证原文、多次确认、暂停、重启防重和确定未执行时可重试。提交 feat: send approved job greetings with durable deduplication。
+- S2 `b97ace70c9f6920c2e66e96f38dd9ccdb91ff9ac` 已推送并核对一致。S3 五文件：招呼弹窗、API 客户端、回执显示逻辑、浏览器回归、本记录。岗位雷达打开清单后可编辑／明确确认后发送 BOSS 招呼语；修改正文或勾选需重新确认，非 BOSS 可继续复制，不会调用原生批量投递。
+- S3 验证：独立浏览器通过逐 JD 生成、编辑／改选撤销同意、逐字保留含换行原文、双击一次、未确认提示；后端全量 216、前端 101、lint/build 和 diff 检查通过。按钮和接口联调为合成数据，未真实发信；评分和技能继续。提交 fix: wire reviewed greeting text into the batch dialog。

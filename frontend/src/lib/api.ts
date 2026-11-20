@@ -336,6 +336,10 @@ export const api = {
     return request("/api/job-batches/platform-apply", { method: "POST", body: JSON.stringify({ job_ids: jobIds, confirmed }) });
   },
 
+  sendReviewedJobGreetings(items: {job_id: number; text: string}[]): Promise<{items: BatchPlatformResult[]}> {
+    return request("/api/job-batches/send-greetings", { method: "POST", body: JSON.stringify({ items, confirmed: true }) });
+  },
+
   previewPlatformApply(jobId: number): Promise<PlatformApplyPreview> {
     return request<PlatformApplyPreview>(`/api/jobs/${jobId}/platform-apply-preview`, {
       method: "POST"
