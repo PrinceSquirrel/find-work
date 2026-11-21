@@ -102,7 +102,7 @@ def test_reviewed_send_keeps_exact_text_and_only_persists_proven_results(tmp_pat
     def send(job, text):
         calls.append((job.id, text))
         if job.id == jobs[0].id:
-            return {"status": "confirmed", "message": "出站原文获平台确认。"}
+            return {"status": "confirmed", "message": "出站原文获平台确认。", "verified_company": "详情页公司", "verified_city": "苏州"}
         return {"status": "unknown", "message": "未收到回执。"}
 
     monkeypatch.setattr(job_batch_service, "BossGreetingService", lambda: SimpleNamespace(send=send))
@@ -118,6 +118,9 @@ def test_reviewed_send_keeps_exact_text_and_only_persists_proven_results(tmp_pat
     records = store.list_applications()
     assert len(records) == 1 and records[0].platform_proof.action == "sent_custom_greeting"
     assert records[0].platform_proof.source_url == jobs[0].url
+    assert records[0].company == "详情页公司"
+    assert client.get("/api/applications/page", params={"location": "苏州"}).json()["total"] == 1
+    assert store.get_job(jobs[0].id).company == "合成公司"
     assert payload["items"][0]["text"] not in records[0].latest_note
     recreated = TestClient(create_app(db_path))
     assert [row["status"] for row in recreated.post(path, json=payload).json()["items"]] == ["skipped", "unknown", "not_attempted"]

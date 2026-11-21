@@ -126,7 +126,8 @@ class JobBatchService:
             cards = [item.card for item in recommendations if item.score >= 40 and item.card.status == "confirmed" and item.card.category != "education"
                      and (item.card.provenance_type != "document" or item.card.quote_verified)]
             if mode == "external":
-                result = self.jobs.llm_client.generate_job_greeting(config, job, cards[:6])
+                prompt_job = job if job.company.strip() != job.salary.strip() else job.model_copy(update={"company": ""})
+                result = self.jobs.llm_client.generate_job_greeting(config, prompt_job, cards[:6])
                 payload = json.loads(result.content)
                 text = payload.get("greeting_message") if isinstance(payload, dict) else None
                 if not isinstance(text, str) or not text.strip() or len(text.strip()) > 180:
@@ -218,7 +219,9 @@ class JobBatchService:
                             "evidence": message, "source_url": ORIGIN + url.path,
                             "action": "sent_custom_greeting", "status": "applied", "button_text": "发送",
                         })
-                        store.create_application(job, note="平台已确认自定义招呼语；未操作简历附件。", platform_proof=proof)
+                        verified_job = job.model_copy(update={"company": outcome.get("verified_company") or job.company,
+                                                              "city": outcome.get("verified_city") or job.city})
+                        store.create_application(verified_job, note="平台已确认自定义招呼语；未操作简历附件。", platform_proof=proof)
                         sent.add(row.job_id)
                         results.append({**base, "status": "confirmed", "message": message})
                     else:
